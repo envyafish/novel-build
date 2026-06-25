@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-background: oklch(1 0 0);
+  --color-foreground: oklch(0.145 0 0);
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.145 0 0);
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.145 0 0);
+  --color-primary: oklch(0.205 0.013 285.88);
+  --color-primary-foreground: oklch(0.985 0.002 285.88);
+  --color-secondary: oklch(0.965 0.005 285.88);
+  --color-secondary-foreground: oklch(0.205 0.013 285.88);
+  --color-muted: oklch(0.965 0.005 285.88);
+  --color-muted-foreground: oklch(0.556 0.013 285.88);
+  --color-accent: oklch(0.965 0.005 285.88);
+  --color-accent-foreground: oklch(0.205 0.013 285.88);
+  --color-destructive: oklch(0.577 0.245 27.33);
+  --color-destructive-foreground: oklch(0.985 0 0);
+  --color-border: oklch(0.922 0.007 285.88);
+  --color-input: oklch(0.922 0.007 285.88);
+  --color-ring: oklch(0.708 0.013 285.88);
+  --color-sidebar-background: oklch(0.985 0.002 285.88);
+  --color-sidebar-foreground: oklch(0.145 0 0);
+  --color-sidebar-primary: oklch(0.205 0.013 285.88);
+  --color-sidebar-primary-foreground: oklch(0.985 0.002 285.88);
+  --color-sidebar-accent: oklch(0.965 0.005 285.88);
+  --color-sidebar-accent-foreground: oklch(0.205 0.013 285.88);
+  --color-sidebar-border: oklch(0.922 0.007 285.88);
+  --color-sidebar-ring: oklch(0.708 0.013 285.88);
+  --radius: 0.625rem;
+}
+
+.dark {
+  --color-background: oklch(0.145 0 0);
+  --color-foreground: oklch(0.985 0.002 285.88);
+  --color-card: oklch(0.145 0 0);
+  --color-card-foreground: oklch(0.985 0.002 285.88);
+  --color-popover: oklch(0.145 0 0);
+  --color-popover-foreground: oklch(0.985 0.002 285.88);
+  --color-primary: oklch(0.985 0.002 285.88);
+  --color-primary-foreground: oklch(0.205 0.013 285.88);
+  --color-secondary: oklch(0.269 0.013 285.88);
+  --color-secondary-foreground: oklch(0.985 0.002 285.88);
+  --color-muted: oklch(0.269 0.013 285.88);
+  --color-muted-foreground: oklch(0.708 0.013 285.88);
+  --color-accent: oklch(0.269 0.013 285.88);
+  --color-accent-foreground: oklch(0.985 0.002 285.88);
+  --color-destructive: oklch(0.396 0.141 25.72);
+  --color-destructive-foreground: oklch(0.985 0 0);
+  --color-border: oklch(0.269 0.013 285.88);
+  --color-input: oklch(0.269 0.013 285.88);
+  --color-ring: oklch(0.439 0.013 285.88);
+  --color-sidebar-background: oklch(0.17 0 0);
+  --color-sidebar-foreground: oklch(0.985 0.002 285.88);
+  --color-sidebar-primary: oklch(0.985 0.002 285.88);
+  --color-sidebar-primary-foreground: oklch(0.205 0.013 285.88);
+  --color-sidebar-accent: oklch(0.269 0.013 285.88);
+  --color-sidebar-accent-foreground: oklch(0.985 0.002 285.88);
+  --color-sidebar-border: oklch(0.269 0.013 285.88);
+  --color-sidebar-ring: oklch(0.439 0.013 285.88);
+}
+
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-border);
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  /* Serif body for long-form reading inside the editor */
+  .tiptap {
+    font-family: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", ui-serif, Georgia, "Times New Roman", serif;
+    font-size: 1.0625rem;
+    line-height: 1.85;
+  }
+}
+
+/* TipTap editor styling */
+.tiptap {
+  outline: none;
+  min-height: 400px;
+  padding: 1rem;
+}
+.tiptap p.is-editor-empty:first-child::before {
+  color: var(--color-muted-foreground);
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+.tiptap p {
+  margin-bottom: 0.5rem;
+  text-indent: 2em;
+}
+.tiptap p.is-editor-empty:first-child {
+  text-indent: 0;
+}
+.tiptap h1, .tiptap h2, .tiptap h3 {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  font-family: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+.tiptap h1 { font-size: 1.5rem; }
+.tiptap h2 { font-size: 1.25rem; }
+.tiptap h3 { font-size: 1.125rem; }
+.tiptap strong { font-weight: 600; }
+.tiptap em { font-style: italic; }
+.tiptap ul, .tiptap ol { padding-left: 1.5rem; margin-bottom: 0.5rem; }
+.tiptap blockquote {
+  border-left: 3px solid var(--color-border);
+  padding-left: 1rem;
+  margin-left: 0;
+  color: var(--color-muted-foreground);
+}
+.tiptap code {
+  background: var(--color-muted);
+  padding: 0.15em 0.3em;
+  border-radius: 0.25rem;
+  font-size: 0.9em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+.tiptap pre {
+  background: var(--color-muted);
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+.tiptap pre code {
+  background: transparent;
+  padding: 0;
+}
+/* AI suggestion highlight */
+span[data-ai-suggestion] {
+  background: oklch(0.92 0.15 95);
+  border-radius: 2px;
+  padding: 0 2px;
+}
+.dark span[data-ai-suggestion] {
+  background: oklch(0.45 0.12 85);
+  color: oklch(0.95 0 0);
+}
+/* Focus mode: hide chrome and relax line height */
+.tiptap-focus {
+  max-width: 42rem;
+  margin: 4rem auto 8rem;
+  padding: 0 1rem 4rem;
+  line-height: 2.1;
+  font-size: 1.125rem;
+}
+.tiptap-focus p { text-indent: 2em; margin-bottom: 0.75rem; }
