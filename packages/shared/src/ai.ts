@@ -22,7 +22,6 @@ export type CompletionMode =
   | 'condense'
   | 'generate_scene'
   | 'generate_chapter'
-  | 'generate_novel_skeleton'
   | 'suggest_next_chapter'
   | 'auto_review'
   | 'plan_story_arc'

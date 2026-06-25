@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { loadConfig } from './config.js'
 import { createLogger } from './logger.js'
 import { registerErrorHandler } from './errors.js'
@@ -73,7 +74,7 @@ export async function buildServer(opts: { enableExternalScan?: boolean; silentLo
   return { app, cfg, db }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { app, cfg } = await buildServer()
   await app.listen({ host: cfg.host, port: cfg.port })
 }

@@ -36,8 +36,8 @@
 🔴 **Limiter 队列无超时**
 [limiter.ts](apps/server/src/ai/limiter.ts) 队列里无限累积 promise。两个 stream 永远 hang 住（如 provider 雪崩），后续请求全部排队，**没有超时也没有上限**。客户端 abort 时 promise reject，但服务端如果挂在 `provider.complete` 的网络 IO 上，**资源不会立即释放**。
 
-🔴 **`generate_novel_skeleton` 客户端传 dummy sceneId=1**
-[SkeletonGenerator.tsx:39](apps/web/src/features/editor/SkeletonGenerator.tsx#L39) 显式注释 `sceneId: 1, // dummy`。**服务端有兜底**（[ai.ts:67](apps/server/src/routes/ai.ts#L67) 的 noSceneNeeded 跳过 ai_settings 查询、[ai.ts:106-108](apps/server/src/routes/ai.ts#L106) 从 draftProjectId 取 project_id），所以不会崩。但 zod 校验要求 sceneId 是合法数字；如果未来去掉了 noSceneNeeded 特殊路径，**就会去查询 scene 1 的 ai_settings**，对不存在场景返回 null 走 fallback，行为隐性正确。**属于脆弱契约**。
+🟢 **`generate_novel_skeleton` 客户端传 dummy sceneId=1**
+已通过移除 `generate_novel_skeleton` 模式解决（2026-06-25）。`StoryArcGenerator` 替代了 `SkeletonGenerator`，使用 `plan_story_arc` 模式直接生成 Markdown 故事弧线笔记，不再需要 JSON 提取或 dummy sceneId。
 
 🟡 **`applyAcceptedText` 默认分支不发 toast**
 [EditorPage.tsx:541-625](apps/web/src/features/editor/EditorPage.tsx#L541) 重构后，AI panel 的 onAccept 在默认分支（continue / polish / rewrite 等）才会发 "已应用到编辑器"，其他模式（plan_story_arc / analyze_voice / generate_chapter）在内部已经发过 toast。**但恢复横幅的接受按钮**走的是同一个 `applyAcceptedText`，对 plan_story_arc 模式**不会**重新发 toast——这是符合预期的，但对一个恢复场景，draft 里 plan_story_arc 是罕见路径，行为未测。
@@ -252,20 +252,15 @@ AI Panel 流式输出期间如果用户切换场景，[useDebouncedSave.ts:18](a
 
 ---
 
-## 8. 骨架生成流程
+## 8. 骨架生成流程（已移除）
 
-[apps/web/src/features/editor/SkeletonGenerator.tsx](apps/web/src/features/editor/SkeletonGenerator.tsx) `generate_novel_skeleton` 走 AI Panel 的 useAiStream，**用 dummy sceneId=1** 绕开 server 的 scene 校验。
+🟢 **整个骨架生成流程已移除（2026-06-25）**
+`SkeletonGenerator` 和 `generate_novel_skeleton` 模式已被移除。替代方案是 `StoryArcGenerator`，使用 `plan_story_arc` 模式直接生成 Markdown 故事弧线笔记（保存到 `projects.story_arc_notes`），不再需要 JSON 提取、dummy sceneId 或 `noSceneNeeded` 特殊路径。
 
-### 8.1 真实漏洞
-
-🔴 **dummy sceneId=1 风险**
-见 1.2。如果未来有人改了 `noSceneNeeded` 检查列表但忘了把 `generate_novel_skeleton` 加进去，**骨架生成会失败但错误信息难以定位**（不会崩，而是走 fallback，AI 拿到错误的 ai_settings）。
-
-🟡 **骨架 JSON 解析失败无重试**
-[SkeletonGenerator.tsx:47-70](apps/web/src/features/editor/SkeletonGenerator.tsx#L47) 解析失败直接 toast 报错，用户必须重新点"生成骨架"再付一次 AI 费用。
-
-🟡 **骨架生成的 character/setting 没去重**
-AI 返回的骨架可能与项目已有的人物/世界观**撞名**，但骨架 apply 路径（如果有）可能**直接新建重复条目**。需要看具体 apply 路径才能确认。
+所有相关漏洞已通过移除功能解决：
+- 🔴→🟢 dummy sceneId=1 风险
+- 🟡→🟢 骨架 JSON 解析失败无重试
+- 🟡→🟢 骨架生成的 character/setting 没去重
 
 ---
 

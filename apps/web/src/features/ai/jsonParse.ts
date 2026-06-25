@@ -8,8 +8,23 @@
  * 3. Falls back to extracting the first balanced top-level `{...}` block.
  * 4. Honors string boundaries (escaped quotes, etc.) while scanning.
  *
- * Returns null if no JSON object can be found.
+ * Two flavors:
+ *   - `parseAiJson<T>` — tolerant, returns null on failure
+ *   - `extractJson<T>`  — strict, throws on failure (for cases where the caller
+ *     wants to surface the parse error to the user)
+ *
+ * Also exports `stripThinking` for defense-in-depth against reasoning models
+ * that leak `<think>...</think>`-style blocks into the streamed content.
  */
+
+export function stripThinking(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+    .replace(/【思考】[\s\S]*?【\/思考】/g, '')
+}
+
 export function parseAiJson<T = unknown>(text: string): T | null {
   if (!text) return null
   // 1. Strip common code fences
@@ -24,7 +39,7 @@ export function parseAiJson<T = unknown>(text: string): T | null {
   } catch {
     // fall through
   }
-  // 3. Find the first balanced {...} block
+  // 3. Find the first balanced {...} block, respecting string boundaries
   const start = s.indexOf('{')
   if (start < 0) return null
   let depth = 0
@@ -59,4 +74,19 @@ export function parseAiJson<T = unknown>(text: string): T | null {
     }
   }
   return null
+}
+
+/**
+ * Strict variant of parseAiJson. Strips thinking blocks, then attempts to
+ * extract JSON. Throws on failure with a descriptive message. Use this when
+ * the caller wants to surface parse errors to the user (e.g. toast
+ * notifications, error UI states).
+ */
+export function extractJson<T = unknown>(text: string): T {
+  const cleaned = stripThinking(text)
+  const result = parseAiJson<T>(cleaned)
+  if (result === null) {
+    throw new Error('无法解析 AI 输出的 JSON')
+  }
+  return result
 }

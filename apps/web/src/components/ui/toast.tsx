@@ -4,12 +4,18 @@ import { cn } from '@/lib/utils'
 
 export type ToastKind = 'info' | 'success' | 'error' | 'warning'
 
+export interface ToastAction {
+  label: string
+  onClick: () => void
+}
+
 export interface Toast {
   id: string
   kind: ToastKind
   title: string
   description?: string
   durationMs?: number
+  action?: ToastAction
 }
 
 export interface ToastInput {
@@ -17,6 +23,7 @@ export interface ToastInput {
   title: string
   description?: string
   durationMs?: number
+  action?: ToastAction
 }
 
 interface ToastContextValue {
@@ -65,6 +72,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         title: input.title,
         ...(input.description !== undefined ? { description: input.description } : {}),
         ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
+        ...(input.action ? { action: input.action } : {}),
       }
       setToasts((prev) => [...prev, t])
       const duration = input.durationMs ?? 4000
@@ -107,6 +115,18 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
                 {t.title}
               </p>
               {t.description && <p className="mt-0.5 text-xs opacity-80">{t.description}</p>}
+              {t.action && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    t.action!.onClick()
+                    dismiss(t.id)
+                  }}
+                  className="mt-1.5 inline-flex items-center gap-1 rounded border border-current/40 px-2 py-0.5 text-xs font-medium opacity-90 hover:opacity-100"
+                >
+                  {t.action.label}
+                </button>
+              )}
             </div>
             <button
               type="button"

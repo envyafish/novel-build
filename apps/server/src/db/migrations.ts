@@ -189,4 +189,8 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
     id: 8,
     sql: `ALTER TABLE characters ADD COLUMN voice_profile TEXT NOT NULL DEFAULT '';`,
   },
+  {
+    id: 9,
+    sql: `ALTER TABLE chapters ADD COLUMN summary TEXT NOT NULL DEFAULT '';`,
+  },
 ]

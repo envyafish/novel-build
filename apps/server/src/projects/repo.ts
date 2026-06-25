@@ -209,6 +209,13 @@ export class ProjectRepo {
     return this.getChapter(id)
   }
 
+  updateChapterSummary(id: number, summary: string): ChapterRow | undefined {
+    this.db
+      .prepare<{ lastInsertRowid: number; changes: number }>('UPDATE chapters SET summary = ? WHERE id = ?')
+      .run(summary, id)
+    return this.getChapter(id)
+  }
+
   updateVolumeName(id: number, name: string): VolumeRow | undefined {
     const trimmed = name.trim()
     if (!trimmed) throw new Error('name required')

@@ -7,7 +7,11 @@ import path from 'node:path'
 
 export interface ContextInput {
   db: Database
-  sceneId: number
+  /** Required for scene-specific context (previous scene tail, scene notes, outline tree).
+   *  Optional for project-level operations like chapter review/extract. */
+  sceneId?: number
+  /** Required for ai_settings lookup. If omitted, falls back to scene JOIN when sceneId is provided. */
+  projectId?: number
   novelsDir: string
   mode: CompletionMode
   systemPrompt: string
@@ -84,8 +88,7 @@ function buildWorldSummary(db: Database, projectId: number): string {
  * Builds the structural outline summary — the story arc notes plus the
  * full volume → chapter → scene tree of the current volume. Injected into
  * modes that need to write *new* content that fits the planned story, so
- * e.g. `generate_chapter` doesn't drift away from the skeleton the user
- * already created with `generate_novel_skeleton`.
+ * e.g. `generate_chapter` doesn't drift away from the planned story arc.
  *
  * Returns an empty string if the scene is not found or the project has no
  * structure yet (callers can fall back to the prior behaviour silently).
@@ -139,41 +142,55 @@ export async function buildContext(input: ContextInput): Promise<{ messages: Cha
     const msgs: ChatMessage[] = sys ? [{ role: 'system', content: sys }, ...input.overrideMessages] : input.overrideMessages
     return { messages: msgs, modelMaxTokens: 0 }
   }
-  const row = input.db
-    .prepare<{ scene_slug: string; chap_slug: string; vol_slug: string; project_slug: string; project_id: number; notes: string | null; chap_title: string }>(
-      `SELECT s.slug as scene_slug, c.slug as chap_slug, c.title as chap_title, v.slug as vol_slug, p.slug as project_slug, p.id as project_id, s.notes
-       FROM scenes s JOIN chapters c ON s.chapter_id = c.id
-       JOIN volumes v ON c.volume_id = v.id
-       JOIN projects p ON v.project_id = p.id WHERE s.id = ?`,
-    )
-    .get(input.sceneId)
-  if (!row) throw new Error('scene not found')
-  const prev = input.db
-    .prepare<{ slug: string; chap_slug: string; vol_slug: string }>(
-      `SELECT s.slug, c.slug as chap_slug, v.slug as vol_slug FROM scenes s
-       JOIN chapters c ON s.chapter_id = c.id
-       JOIN volumes v ON c.volume_id = v.id
-       WHERE s.id < ? AND s.chapter_id = (SELECT chapter_id FROM scenes WHERE id = ?)
-       ORDER BY s.id DESC LIMIT 1`,
-    )
-    .get(input.sceneId, input.sceneId)
+
+  // Resolve scene row + projectId. Scene is optional (project-level operations
+  // like chapter review/extract only need the project for ai_settings + world
+  // summary). When sceneId is absent, skip scene-specific context (previous
+  // tail, scene notes, outline tree).
+  const row = input.sceneId !== undefined
+    ? input.db
+        .prepare<{ scene_slug: string; chap_slug: string; vol_slug: string; project_slug: string; project_id: number; notes: string | null; chap_title: string }>(
+          `SELECT s.slug as scene_slug, c.slug as chap_slug, c.title as chap_title, v.slug as vol_slug, p.slug as project_slug, p.id as project_id, s.notes
+           FROM scenes s JOIN chapters c ON s.chapter_id = c.id
+           JOIN volumes v ON c.volume_id = v.id
+           JOIN projects p ON v.project_id = p.id WHERE s.id = ?`,
+        )
+        .get(input.sceneId)
+    : undefined
+  if (input.sceneId !== undefined && !row) throw new Error('scene not found')
+
+  const projectId = input.projectId ?? row?.project_id
+  if (!projectId) throw new Error('project not resolved')
+
   let prevTail = ''
-  if (prev) {
-    const file = manuscriptPath(path.join(input.novelsDir, row.project_slug), prev.vol_slug, prev.chap_slug, prev.slug)
-    const r = await readManuscript(file)
-    prevTail = r.text.slice(-input.contextPrevChars)
+  let ctxText = ''
+  if (row && input.sceneId !== undefined) {
+    const prev = input.db
+      .prepare<{ slug: string; chap_slug: string; vol_slug: string }>(
+        `SELECT s.slug, c.slug as chap_slug, v.slug as vol_slug FROM scenes s
+         JOIN chapters c ON s.chapter_id = c.id
+         JOIN volumes v ON c.volume_id = v.id
+         WHERE s.id < ? AND s.chapter_id = (SELECT chapter_id FROM scenes WHERE id = ?)
+         ORDER BY s.id DESC LIMIT 1`,
+      )
+      .get(input.sceneId, input.sceneId)
+    if (prev) {
+      const file = manuscriptPath(path.join(input.novelsDir, row.project_slug), prev.vol_slug, prev.chap_slug, prev.slug)
+      const r = await readManuscript(file)
+      prevTail = r.text.slice(-input.contextPrevChars)
+    }
+    ctxText = `Volume: ${row.vol_slug}\nChapter: ${row.chap_title}\nScene notes: ${row.notes ?? ''}\n\n[Previous scene tail]\n${prevTail}`
   }
 
   // Build world summary for AI context
-  const worldSummary = buildWorldSummary(input.db, row.project_id)
+  const worldSummary = buildWorldSummary(input.db, projectId)
   // Inject the structural outline only for modes that write new content
-  // aligned with the planned story; other modes (continue/polish/etc.) get
-  // the previous-scene-tail and the world summary, same as before.
-  const outlineSummary = NEEDS_OUTLINE.includes(input.mode)
-    ? buildOutlineSummary(input.db, row.project_id, input.sceneId)
+  // aligned with the planned story. Outline requires a scene (it reads the
+  // scene's volume's chapter tree); skip when sceneId is absent.
+  const outlineSummary = row && input.sceneId !== undefined && NEEDS_OUTLINE.includes(input.mode)
+    ? buildOutlineSummary(input.db, projectId, input.sceneId)
     : ''
 
-  let ctxText = `Volume: ${row.vol_slug}\nChapter: ${row.chap_title}\nScene notes: ${row.notes ?? ''}\n\n[Previous scene tail]\n${prevTail}`
   if (outlineSummary) {
     ctxText += `\n\n[Outline]\n${outlineSummary}`
   }

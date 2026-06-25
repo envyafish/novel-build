@@ -1,5 +1,5 @@
 import { useState, memo } from 'react'
-import { ChevronRight, Plus, FileText, BookOpen, Layers, Trash2, Pencil, RefreshCw } from 'lucide-react'
+import { ChevronRight, Plus, FileText, BookOpen, Layers, Trash2, Pencil, RefreshCw, PenLine, ShieldCheck } from 'lucide-react'
 import type { OutlineNode } from './tree-utils.js'
 import type { EntityStatus } from '@novel/shared'
 import { Button } from '@/components/ui/button'
@@ -21,7 +21,11 @@ const STATUS_STYLES: Record<EntityStatus, string> = {
 interface Props {
   nodes: OutlineNode[]
   currentSceneId?: number | undefined
+  /** Chapter currently selected for chapter-level AI actions. Highlights in the tree. */
+  selectedChapterId?: number | undefined
   onSelectScene: (sceneId: number) => void
+  /** Fires when user clicks the chapter label (not when expanding/collapsing). */
+  onSelectChapter?: ((chapterId: number) => void) | undefined
   onAddVolume?: (() => void) | undefined
   onAddChapter: (volumeId: number) => void
   onAddScene: (chapterId: number) => void
@@ -31,12 +35,18 @@ interface Props {
   onRenameScene?: ((sceneId: number) => void) | undefined
   onRenameChapter?: ((chapterId: number) => void) | undefined
   onRenameVolume?: ((volumeId: number) => void) | undefined
+  /** Chapter-level review (auto_review over all scenes in the chapter). */
+  onReviewChapter?: ((chapterId: number) => void) | undefined
+  /** Chapter-level extract (consistency_check over all scenes in the chapter). */
+  onExtractChapter?: ((chapterId: number) => void) | undefined
 }
 
 export const OutlineTree = memo(function OutlineTree({
   nodes,
   currentSceneId,
+  selectedChapterId,
   onSelectScene,
+  onSelectChapter,
   onAddVolume,
   onAddChapter,
   onAddScene,
@@ -46,6 +56,8 @@ export const OutlineTree = memo(function OutlineTree({
   onRenameScene,
   onRenameChapter,
   onRenameVolume,
+  onReviewChapter,
+  onExtractChapter,
 }: Props) {
   return (
     <ScrollArea className="h-full">
@@ -55,7 +67,9 @@ export const OutlineTree = memo(function OutlineTree({
             key={v.id}
             node={v}
             currentSceneId={currentSceneId}
+            selectedChapterId={selectedChapterId}
             onSelectScene={onSelectScene}
+            onSelectChapter={onSelectChapter}
             onAddChapter={onAddChapter}
             onAddScene={onAddScene}
             onCycleStatus={onCycleStatus}
@@ -64,6 +78,8 @@ export const OutlineTree = memo(function OutlineTree({
             onRenameScene={onRenameScene}
             onRenameChapter={onRenameChapter}
             onRenameVolume={onRenameVolume}
+            onReviewChapter={onReviewChapter}
+            onExtractChapter={onExtractChapter}
           />
         ))}
         {onAddVolume && (
@@ -84,7 +100,9 @@ export const OutlineTree = memo(function OutlineTree({
 const VolumeNode = memo(function VolumeNode({
   node,
   currentSceneId,
+  selectedChapterId,
   onSelectScene,
+  onSelectChapter,
   onAddChapter,
   onAddScene,
   onCycleStatus,
@@ -93,6 +111,8 @@ const VolumeNode = memo(function VolumeNode({
   onRenameScene,
   onRenameChapter,
   onRenameVolume,
+  onReviewChapter,
+  onExtractChapter,
 }: { node: OutlineNode } & Omit<Props, 'nodes' | 'onAddVolume'>) {
   const [open, setOpen] = useState(true)
   return (
@@ -130,13 +150,17 @@ const VolumeNode = memo(function VolumeNode({
               key={c.id}
               node={c}
               currentSceneId={currentSceneId}
+              selectedChapterId={selectedChapterId}
               onSelectScene={onSelectScene}
+              onSelectChapter={onSelectChapter}
               onAddScene={onAddScene}
               onCycleStatus={onCycleStatus}
               onDeleteScene={onDeleteScene}
               onDeleteChapter={onDeleteChapter}
               onRenameScene={onRenameScene}
               onRenameChapter={onRenameChapter}
+              onReviewChapter={onReviewChapter}
+              onExtractChapter={onExtractChapter}
             />
           ))}
           <Button
@@ -156,29 +180,79 @@ const VolumeNode = memo(function VolumeNode({
 const ChapterNode = memo(function ChapterNode({
   node,
   currentSceneId,
+  selectedChapterId,
   onSelectScene,
+  onSelectChapter,
   onAddScene,
   onCycleStatus,
   onDeleteScene,
   onDeleteChapter,
   onRenameScene,
   onRenameChapter,
+  onReviewChapter,
+  onExtractChapter,
 }: { node: OutlineNode } & Omit<Props, 'nodes' | 'onAddChapter' | 'onAddVolume' | 'onRenameVolume'>) {
   const [open, setOpen] = useState(true)
+  const isSelected = node.id === selectedChapterId
   return (
     <div>
-      <div className="group/ch flex items-center gap-1.5 rounded-md px-2 py-1 text-sm text-foreground hover:bg-accent">
+      <div
+        className={cn(
+          'group/ch flex items-center gap-1.5 rounded-md px-2 py-1 text-sm text-foreground transition-colors',
+          isSelected ? 'bg-primary/10 ring-1 ring-primary/40' : 'hover:bg-accent',
+        )}
+      >
         <button
           onClick={() => setOpen(!open)}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          className="flex shrink-0 items-center"
+          aria-label={open ? '折叠章节' : '展开章节'}
         >
           <ChevronRight
-            className={cn('h-3 w-3 shrink-0 transition-transform', open && 'rotate-90')}
+            className={cn('h-3 w-3 transition-transform', open && 'rotate-90')}
           />
-          <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate">{node.label}</span>
         </button>
-        <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover/ch:opacity-100">
+        <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        {onSelectChapter ? (
+          <button
+            type="button"
+            onClick={() => onSelectChapter(node.id)}
+            className="min-w-0 flex-1 cursor-pointer truncate text-left"
+            title="选择章节以触发 AI 审稿 / 提取"
+          >
+            {node.label}
+          </button>
+        ) : (
+          <span className="min-w-0 flex-1 truncate">{node.label}</span>
+        )}
+        <div className="flex shrink-0 items-center gap-0.5">
+          {onReviewChapter && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onReviewChapter(node.id)
+              }}
+              className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+              aria-label="审章节"
+              title="审章节"
+            >
+              <PenLine className="h-3 w-3" />
+            </button>
+          )}
+          {onExtractChapter && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onExtractChapter(node.id)
+              }}
+              className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+              aria-label="从章节提取设定"
+              title="提取章节设定"
+            >
+              <ShieldCheck className="h-3 w-3" />
+            </button>
+          )}
           {onRenameChapter && (
             <button
               type="button"
@@ -186,7 +260,7 @@ const ChapterNode = memo(function ChapterNode({
                 e.stopPropagation()
                 onRenameChapter(node.id)
               }}
-              className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+              className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground opacity-60 transition-opacity group-hover/ch:opacity-100"
               aria-label="重命名章节"
               title="重命名"
             >
@@ -200,7 +274,7 @@ const ChapterNode = memo(function ChapterNode({
                 e.stopPropagation()
                 onDeleteChapter(node.id)
               }}
-              className="rounded p-1 text-red-600 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-950"
+              className="rounded p-1 text-red-600 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-950 opacity-60 transition-opacity group-hover/ch:opacity-100"
               aria-label="删除章节"
               title="删除"
             >

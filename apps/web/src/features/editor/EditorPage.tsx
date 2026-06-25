@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Sparkles, FilePlus, BookPlus, Settings as SettingsIcon, Focus as FocusIcon, Camera, BookOpen, Globe, FileText, Wand2, Check, Save, ChevronDown, ShieldCheck, PenLine, RotateCcw, ArrowLeft, Trash2 } from 'lucide-react'
+import { Sparkles, FilePlus, BookPlus, Settings as SettingsIcon, Focus as FocusIcon, Camera, BookOpen, Globe, FileText, Wand2, Check, Save, ChevronDown, RotateCcw, Trash2, Pencil } from 'lucide-react'
 import { api, ApiClientError } from '../../api/client.js'
 import type { SceneDetailDto, AiSettingsDto, EntityStatus, ProjectDto, WorldCategory, ConflictType, ForeshadowStatus, CompletionMode } from '@novel/shared'
 import { SceneEditor } from './SceneEditor.js'
@@ -18,10 +18,11 @@ import { parseAiJson } from '../ai/jsonParse.js'
 import { runAiCompletion } from '../ai/runAi.js'
 import { draftsApi, type DraftDto } from '../ai/draftsApi.js'
 import { useAiStream } from '../../hooks/useAiStream.js'
-import { SkeletonGenerator } from './SkeletonGenerator.js'
+import { StoryArcGenerator } from './StoryArcGenerator.js'
 import { useDebouncedSave } from '../../hooks/useDebouncedSave.js'
 import { TopBar } from '@/components/topbar'
 import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent } from '@/components/ui/card'
 import { usePrompt } from '@/components/ui/prompt-dialog'
 import { useConfirm } from '@/components/ui/confirm-dialog'
@@ -39,7 +40,8 @@ export function EditorPage() {
   const [content, setContent] = useState('')
   const [baseHash, setBaseHash] = useState('')
   const [aiOpen, setAiOpen] = useState(false)
-  const [skeletonOpen, setSkeletonOpen] = useState(false)
+  const [storyArcOpen, setStoryArcOpen] = useState(false)
+  const [editingStoryArc, setEditingStoryArc] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
   const [recoverDraft, setRecoverDraft] = useState<DraftDto | undefined>(undefined)
   // AI stream state lives in EditorPage so it persists across panel open/close.
@@ -47,43 +49,44 @@ export function EditorPage() {
   const [reviewOpen, setReviewOpen] = useState(false)
   const [reviewText, setReviewText] = useState('')
   const [reviewLoading, setReviewLoading] = useState(false)
-  const [reviewScope, setReviewScope] = useState<'scene' | 'chapter'>('scene')
   const [reviewKind, setReviewKind] = useState<'review' | 'extract'>('review')
-  const [reviewMenuOpen, setReviewMenuOpen] = useState(false)
-  const [reviewChapterScenes, setReviewChapterScenes] = useState<Array<{ title: string; id: number }>>([])
+  // The chapter the current review/extract is targeting. Distinct from the
+  // currently-open scene: a user can trigger chapter review from the sidebar
+  // while looking at a scene in a different chapter.
+  const [reviewChapterId, setReviewChapterId] = useState<number | null>(null)
   // Snapshot of the scenes the review is *targeting* — locked at review time
   // so that applying the review after navigating to a different scene still
-  // writes to the originally reviewed scene.
+  // writes to the originally reviewed scenes.
   const [reviewTargets, setReviewTargets] = useState<Array<{ title: string; id: number }>>([])
+  // Chapter currently selected in the outline (drives chapter-level AI actions).
+  const [selectedChapterId, setSelectedChapterId] = useState<number | null>(null)
   const [applyProgress, setApplyProgress] = useState<{ current: number; total: number; sceneTitle: string } | null>(null)
   const [applyLoading, setApplyLoading] = useState(false)
 
   // Restore review state from localStorage on mount (persists across refresh)
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(`review-${projectId}-${sceneId}`)
+      const saved = localStorage.getItem(`review-${projectId}-${reviewChapterId}`)
       if (saved) {
         const data = JSON.parse(saved)
         if (data.reviewText) setReviewText(data.reviewText)
         if (data.reviewKind) setReviewKind(data.reviewKind)
-        if (data.reviewScope) setReviewScope(data.reviewScope)
         if (data.reviewText) setReviewOpen(true)
       }
     } catch { /* ignore */ }
-  }, [projectId, sceneId])
+  }, [projectId, reviewChapterId])
 
   // Persist review state to localStorage when it changes
   useEffect(() => {
-    if (reviewText && sceneId) {
+    if (reviewText && reviewChapterId) {
       try {
-        localStorage.setItem(`review-${projectId}-${sceneId}`, JSON.stringify({
+        localStorage.setItem(`review-${projectId}-${reviewChapterId}`, JSON.stringify({
           reviewText,
           reviewKind,
-          reviewScope,
         }))
       } catch { /* ignore */ }
     }
-  }, [reviewText, reviewKind, reviewScope, projectId, sceneId])
+  }, [reviewText, reviewKind, projectId, reviewChapterId])
   const [saveState, setSaveState] = useState<SaveState>('idle')
   const [lastSavedAt, setLastSavedAt] = useState<number | undefined>(undefined)
   const [saveError, setSaveError] = useState<string | undefined>(undefined)
@@ -453,21 +456,22 @@ export function EditorPage() {
     ...(currentScene ? [{ label: currentScene.title }] : []),
   ]
 
-  // Helper: run AI fetch
-  const runAiFetch = (mode: string, inputText: string) =>
+  // Helper: run AI fetch. `sceneId` is optional — server uses projectId for
+  // ai_settings lookup and only needs sceneId for modes that pull scene-
+  // specific context (continue/polish/rewrite on the current scene).
+  const runAiFetch = (mode: string, inputText: string, opts?: { sceneId?: number }) =>
     runAiCompletion({
-      sceneId: sceneId ?? 0,
+      projectId,
+      ...(opts?.sceneId !== undefined ? { sceneId: opts.sceneId } : sceneId !== undefined ? { sceneId } : {}),
       mode,
       model: settings.data?.model ?? 'gpt-4o-mini',
       inputText,
     })
 
-  // Helper: read all scenes in current chapter
-  const getChapterContent = async () => {
-    if (!outlineData || !sceneId) return null
-    const cs = outlineData.scenes.find((s) => s.id === sceneId)
-    if (!cs) return null
-    const chapterScenes = outlineData.scenes.filter((s) => s.chapterId === cs.chapterId)
+  // Helper: read all scenes in a given chapter (by chapterId, not derived from current scene).
+  const getChapterContent = async (chapterId: number) => {
+    if (!outlineData) return null
+    const chapterScenes = outlineData.scenes.filter((s) => s.chapterId === chapterId)
     let text = ''
     const titles: { title: string; id: number }[] = []
     for (const s of chapterScenes) {
@@ -478,48 +482,39 @@ export function EditorPage() {
     return { text, titles }
   }
 
-  // Review/extract AI call. The targets (scene/chapter scenes) are *snapshotted
-  // here* — subsequent scene navigation does NOT change what the review is
-  // targeting, so applying the review never accidentally writes to a scene
-  // the user is merely looking at when they click "Apply".
+  // Review/extract AI call. The targets (chapter scenes) are *snapshotted here* —
+// subsequent scene navigation does NOT change what the review is targeting, so
+// applying the review never accidentally writes to a scene the user is merely
+// looking at when they click "Apply". Triggered exclusively from the
+// outline sidebar, against an explicit chapterId.
   const runReview = useCallback(
-    async (kind: 'review' | 'extract', scope: 'scene' | 'chapter') => {
-      if (!sceneId) return
+    async (kind: 'review' | 'extract', chapterId: number) => {
       setReviewOpen(true)
       setReviewLoading(true)
       setReviewText('')
       setReviewKind(kind)
-      setReviewScope(scope)
-      setReviewChapterScenes([])
+      setReviewChapterId(chapterId)
       setReviewTargets([])
       try {
-        let inputText = content
-        if (scope === 'chapter') {
-          const ch = await getChapterContent()
-          if (ch) {
-            inputText = ch.text
-            setReviewChapterScenes(ch.titles)
-            setReviewTargets(ch.titles)
-          }
-        } else {
-          // Scene scope: lock to the *current* scene at review time. If the
-          // user navigates away afterwards, `reviewTargets` keeps the original.
-          const cur = outlineData?.scenes.find((s) => s.id === sceneId)
-          if (cur) {
-            const target = [{ id: cur.id, title: cur.title }]
-            setReviewChapterScenes(target)
-            setReviewTargets(target)
-          }
+        const ch = await getChapterContent(chapterId)
+        if (!ch || ch.titles.length === 0) {
+          toast({ kind: 'info', title: '该章节暂无内容', description: '请先在该章节下创建并填充场景。' })
+          setReviewLoading(false)
+          setReviewOpen(false)
+          return
         }
+        setReviewTargets(ch.titles)
         if (kind === 'review') {
-          const text = await runAiFetch('auto_review', inputText)
+          // Chapter-level review/extract: don't pass sceneId — server uses
+          // projectId from the body for ai_settings, no scene JOIN needed.
+          const text = await runAiFetch('auto_review', ch.text)
           setReviewText(text)
         } else {
           // Extract: run consistency_check only. The `voice` slot is kept in
           // the wrapper for backward compat with the parser below, but no
           // longer triggers a separate AI call — voice profiles are now
           // returned inside the consistency_check JSON as `voiceProfile`.
-          const settingsText = await runAiFetch('consistency_check', inputText)
+          const settingsText = await runAiFetch('consistency_check', ch.text)
           setReviewText(JSON.stringify({ settings: settingsText, voice: '' }))
         }
       } catch (e) {
@@ -528,7 +523,33 @@ export function EditorPage() {
         setReviewLoading(false)
       }
     },
-    [sceneId, content, runAiFetch, getChapterContent, outlineData],
+    [runAiFetch, getChapterContent, toast],
+  )
+
+  // Auto-track which chapter is "selected" based on the currently-open scene.
+  // This lets chapter-level buttons work without forcing the user to click a
+  // chapter first.
+  useEffect(() => {
+    if (sceneId && outlineData) {
+      const sc = outlineData.scenes.find((s) => s.id === sceneId)
+      if (sc) setSelectedChapterId(sc.chapterId)
+    }
+  }, [sceneId, outlineData])
+
+  // Sidebar triggers: just delegate to runReview with the explicit chapterId.
+  const handleReviewChapter = useCallback(
+    (chapterId: number) => {
+      setSelectedChapterId(chapterId)
+      void runReview('review', chapterId)
+    },
+    [runReview],
+  )
+  const handleExtractChapter = useCallback(
+    (chapterId: number) => {
+      setSelectedChapterId(chapterId)
+      void runReview('extract', chapterId)
+    },
+    [runReview],
   )
 
   // Apply a finalized AI text result to the project — shared between the
@@ -623,30 +644,33 @@ export function EditorPage() {
     [projectId, sceneId, content, selectionText, outlineData, qc, toast],
   )
 
-  // Apply review: auto_review applies suggestions to current scene; consistency_check extracts settings to world
+  // Apply review: rewrites every snapshotted scene in the chapter with the
+// review feedback; or (action === 'extract') parses settings JSON and writes
+// to the world DB. Scene-level variants have been removed — only chapter
+// review/extract remain, triggered from the outline sidebar.
   const applyReview = useCallback(
     async (action: 'replace_all' | 'extract') => {
-      if (!reviewText || !sceneId) return
+      if (!reviewText) return
       setApplyLoading(true)
       setApplyProgress(null)
       try {
         if (action === 'replace_all') {
-          if (reviewScope === 'chapter' && reviewTargets.length > 0) {
-            // Chapter-level review: re-run AI for each *snapshotted* scene with
-            // the review feedback as context, then apply to each. The target
-            // list is locked — switching chapters after the review does not
-            // change what gets rewritten.
-            let applied = 0
-            const total = reviewTargets.length
-            for (let i = 0; i < total; i++) {
-              const sc = reviewTargets[i]!
-              setApplyProgress({ current: i + 1, total, sceneTitle: sc.title })
-              try {
-                // Read current scene content
-                const sceneData = await api<{ markdown: string; baseHash: string }>(`/api/scenes/${sc.id}`)
-                const sceneText = sceneData.markdown
-                // Ask AI to rewrite this scene incorporating the review feedback
-                const rewritePrompt = `以下是对整个章节的审稿反馈，请根据反馈重写这个场景。只输出重写后的内容，不要输出任何解释。
+          if (reviewTargets.length === 0) return
+          // Chapter-level review: re-run AI for each *snapshotted* scene with
+          // the review feedback as context, then apply to each. The target
+          // list is locked — switching chapters after the review does not
+          // change what gets rewritten.
+          let applied = 0
+          const total = reviewTargets.length
+          for (let i = 0; i < total; i++) {
+            const sc = reviewTargets[i]!
+            setApplyProgress({ current: i + 1, total, sceneTitle: sc.title })
+            try {
+              // Read current scene content
+              const sceneData = await api<{ markdown: string; baseHash: string }>(`/api/scenes/${sc.id}`)
+              const sceneText = sceneData.markdown
+              // Ask AI to rewrite this scene incorporating the review feedback
+              const rewritePrompt = `以下是对整个章节的审稿反馈，请根据反馈重写这个场景。只输出重写后的内容，不要输出任何解释。
 
 [审稿反馈]
 ${reviewText}
@@ -656,69 +680,22 @@ ${sc.title}
 
 [场景原文]
 ${sceneText}`
-                const rewritten = await runAiFetch('rewrite', rewritePrompt)
-                const formatted = formatAiOutput(rewritten)
-                // Save to server
-                await api(`/api/scenes/${sc.id}`, {
-                  method: 'PUT',
-                  body: JSON.stringify({ markdown: formatted, baseHash: sceneData.baseHash, force: true }),
-                })
-                applied++
-              } catch (e) {
-                console.error(`Failed to apply review to scene ${sc.title}:`, e)
-              }
-            }
-            setApplyProgress(null)
-            // Refresh outline and current scene
-            qc.invalidateQueries({ queryKey: ['outline', projectId] })
-            qc.invalidateQueries({ queryKey: ['scene', sceneId] })
-            toast({ kind: 'success', title: `审稿建议已应用到 ${applied} 个场景` })
-          } else {
-            // Scene-level review: rewrite the snapshotted scene (NOT the
-            // current one). If the target is the scene the user is currently
-            // viewing, also push the new content into the live editor.
-            const target = reviewTargets[0]!
-            setApplyProgress({ current: 1, total: 1, sceneTitle: target.title })
-            const sceneData = await api<{ markdown: string; baseHash: string }>(`/api/scenes/${target.id}`)
-            const rewritePrompt = `以下是对场景的审稿反馈，请根据反馈重写这个场景。只输出重写后的内容，不要输出任何解释。
-
-[审稿反馈]
-${reviewText}
-
-[场景标题]
-${target.title}
-
-[场景原文]
-${sceneData.markdown}`
-            const rewritten = await runAiFetch('rewrite', rewritePrompt)
-            const formatted = formatAiOutput(rewritten)
-            await api(`/api/scenes/${target.id}`, {
-              method: 'PUT',
-              body: JSON.stringify({ markdown: formatted, baseHash: sceneData.baseHash, force: true }),
-            })
-            setApplyProgress(null)
-            qc.invalidateQueries({ queryKey: ['outline', projectId] })
-            qc.invalidateQueries({ queryKey: ['scene', sceneId] })
-            if (target.id === sceneId) {
-              // User is still viewing the scene they reviewed — show the
-              // rewrite in the editor immediately.
-              if (editorApiRef.current) {
-                editorApiRef.current.setContentFromText(formatted)
-              } else {
-                setContent(formatted)
-              }
-              toast({ kind: 'success', title: '审稿建议已应用到当前场景' })
-            } else {
-              // User has navigated to a different scene since reviewing. Don't
-              // touch what they're looking at — the rewrite went to the
-              // originally targeted scene on the server.
-              toast({
-                kind: 'success',
-                title: `审稿已应用到「${target.title}」`,
-                description: '已切换到其他场景，请在大纲中打开该场景查看',
+              const rewritten = await runAiFetch('rewrite', rewritePrompt, { sceneId: sc.id })
+              const formatted = formatAiOutput(rewritten)
+              // Save to server
+              await api(`/api/scenes/${sc.id}`, {
+                method: 'PUT',
+                body: JSON.stringify({ markdown: formatted, baseHash: sceneData.baseHash, force: true }),
               })
+              applied++
+            } catch (e) {
+              console.error(`Failed to apply review to scene ${sc.title}:`, e)
             }
           }
+          setApplyProgress(null)
+          qc.invalidateQueries({ queryKey: ['outline', projectId] })
+          if (sceneId) qc.invalidateQueries({ queryKey: ['scene', sceneId] })
+          toast({ kind: 'success', title: `审稿建议已应用到 ${applied} 个场景` })
         } else {
           // Extract: parse combined settings + voice result
           let savedCount = 0
@@ -956,24 +933,63 @@ ${sceneData.markdown}`
           {sidebarTab === 'outline' ? (
             <>
               <div className="flex h-9 items-center justify-between px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"><span>大纲</span><span className="font-mono normal-case">{totalScenes}</span></div>
-              <div className="px-2 pb-1"><Button variant="ghost" size="sm" className="w-full justify-start gap-1.5 text-xs text-muted-foreground" onClick={() => setSkeletonOpen(true)}><Sparkles className="h-3 w-3" /> 一键生成小说骨架</Button></div>
+              {!project.data?.storyArcNotes && (
+                <div className="px-2 pb-1"><Button variant="ghost" size="sm" className="w-full justify-start gap-1.5 text-xs text-muted-foreground" onClick={() => setStoryArcOpen(true)}><Sparkles className="h-3 w-3" /> 生成故事弧线笔记</Button></div>
+              )}
               {project.data?.storyArcNotes && (
                 <div className="mx-2 mb-2">
                   <details className="group rounded-lg border bg-muted/20 text-xs">
                     <summary className="flex cursor-pointer items-center gap-1.5 px-3 py-2 font-semibold text-foreground select-none">
-                      <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" /> 故事弧线笔记
+                      <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-90" /> 故事弧线笔记
                     </summary>
                     <div className="max-h-48 overflow-y-auto border-t px-3 py-2">
                       <pre className="whitespace-pre-wrap leading-relaxed text-muted-foreground">{project.data.storyArcNotes}</pre>
                     </div>
+                    <div className="flex gap-1 border-t px-3 py-1.5">
+                      <Button variant="ghost" size="sm" className="h-6 flex-1 text-[10px] text-muted-foreground" onClick={() => setStoryArcOpen(true)}>
+                        <RotateCcw className="mr-1 h-2.5 w-2.5" /> 重新生成
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-6 flex-1 text-[10px] text-muted-foreground" onClick={() => setEditingStoryArc(true)}>
+                        <Pencil className="mr-1 h-2.5 w-2.5" /> 编辑
+                      </Button>
+                    </div>
                   </details>
+                </div>
+              )}
+              {editingStoryArc && (
+                <div className="mx-2 mb-2 space-y-1.5">
+                  <Textarea
+                    defaultValue={project.data?.storyArcNotes ?? ''}
+                    rows={8}
+                    className="text-xs font-mono"
+                    id="story-arc-edit"
+                  />
+                  <div className="flex gap-1">
+                    <Button size="sm" className="h-6 flex-1 text-[10px]" onClick={async () => {
+                      const el = document.getElementById('story-arc-edit') as HTMLTextAreaElement
+                      if (!el) return
+                      try {
+                        await api(`/api/projects/${projectId}/story-arc`, { method: 'PATCH', body: JSON.stringify({ storyArcNotes: el.value }) })
+                        qc.invalidateQueries({ queryKey: ['project', projectId] })
+                        setEditingStoryArc(false)
+                        toast({ kind: 'success', title: '已保存' })
+                      } catch (e) { toast({ kind: 'error', title: '保存失败', description: (e as Error).message }) }
+                    }}>
+                      <Check className="mr-1 h-2.5 w-2.5" /> 保存
+                    </Button>
+                    <Button variant="ghost" size="sm" className="h-6 flex-1 text-[10px]" onClick={() => setEditingStoryArc(false)}>
+                      取消
+                    </Button>
+                  </div>
                 </div>
               )}
               {outlineData ? (
                 <OutlineTree
                   nodes={buildTree(outlineData.volumes, outlineData.chapters, outlineData.scenes)}
                   currentSceneId={sceneId}
+                  selectedChapterId={selectedChapterId ?? undefined}
                   onSelectScene={setSceneId}
+                  onSelectChapter={setSelectedChapterId}
                   onAddVolume={() => addVolume.mutate()}
                   onAddChapter={(volumeId) => addChapter.mutate(volumeId)}
                   onAddScene={(chapterId) => addScene.mutate(chapterId)}
@@ -983,6 +999,8 @@ ${sceneData.markdown}`
                   onRenameScene={(id) => renameScene(id)}
                   onRenameChapter={(id) => renameChapter(id)}
                   onRenameVolume={(id) => renameVolume(id)}
+                  onReviewChapter={handleReviewChapter}
+                  onExtractChapter={handleExtractChapter}
                 />
               ) : (
                 <div className="p-4 text-sm text-muted-foreground">读取大纲中…</div>
@@ -1064,76 +1082,8 @@ ${sceneData.markdown}`
                 />
               </div>
 
-              {/* Floating buttons: Review dropdown + AI button */}
+              {/* Floating AI button (chapter-level review/extract moved to outline sidebar) */}
               <div className="fixed bottom-6 right-6 z-50 flex flex-col items-center gap-2">
-                {/* Review dropdown */}
-                <div className="relative">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-11 w-11 rounded-full shadow-lg bg-background"
-                    onClick={() => {
-                      if (reviewOpen) {
-                        setReviewOpen(false)
-                      } else if (reviewText || reviewLoading) {
-                        // Reopen existing review or loading panel
-                        setReviewOpen(true)
-                      } else {
-                        setReviewMenuOpen((v) => !v)
-                      }
-                    }}
-                  >
-                    <PenLine className="h-4 w-4" />
-                    {/* Pulsing indicator when review is loading */}
-                    {reviewLoading && (
-                      <span className="absolute -right-0.5 -top-0.5 flex h-3 w-3">
-                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
-                        <span className="relative inline-flex h-3 w-3 rounded-full bg-blue-500" />
-                      </span>
-                    )}
-                  </Button>
-                  {reviewMenuOpen && (
-                    <>
-                      <div className="fixed inset-0 z-40" onClick={() => setReviewMenuOpen(false)} />
-                      <div className="absolute bottom-full right-0 z-50 mb-2 w-48 flex-col gap-0.5 rounded-lg border bg-background p-1 shadow-xl">
-                        <button
-                          type="button"
-                          className="flex items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-                          onClick={() => { setReviewMenuOpen(false); runReview('review', 'scene') }}
-                        >
-                          <PenLine className="h-3.5 w-3.5 text-muted-foreground" />
-                          审当前场景
-                        </button>
-                        <button
-                          type="button"
-                          className="flex items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-                          onClick={() => { setReviewMenuOpen(false); runReview('review', 'chapter') }}
-                        >
-                          <PenLine className="h-3.5 w-3.5 text-muted-foreground" />
-                          审当前章节
-                        </button>
-                        <div className="my-0.5 border-t" />
-                        <button
-                          type="button"
-                          className="flex items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-                          onClick={() => { setReviewMenuOpen(false); runReview('extract', 'scene') }}
-                        >
-                          <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
-                          提取场景设定
-                        </button>
-                        <button
-                          type="button"
-                          className="flex items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-                          onClick={() => { setReviewMenuOpen(false); runReview('extract', 'chapter') }}
-                        >
-                          <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
-                          提取章节设定
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-                {/* AI button */}
                 <Button
                   onClick={() => void handleOpenAi()}
                   className="relative h-11 w-11 rounded-full shadow-lg"
@@ -1151,114 +1101,7 @@ ${sceneData.markdown}`
                 </Button>
               </div>
 
-              {/* Review panel overlay */}
-              {reviewOpen && (
-                <div className="absolute bottom-24 right-6 z-40 w-80 max-h-96 overflow-hidden rounded-xl border bg-background shadow-2xl">
-                  <div className="flex items-center justify-between border-b px-3 py-2">
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-                        title="返回选项"
-                        onClick={() => { setReviewOpen(false); setReviewMenuOpen(true); setApplyProgress(null) }}
-                      >
-                        <ArrowLeft className="h-3.5 w-3.5" />
-                      </button>
-                      <span className="text-xs font-semibold text-foreground">
-                        {reviewKind === 'review' ? '📖 审稿建议' : '🔍 设定提取'}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-                      onClick={() => { setReviewOpen(false); setApplyProgress(null) }}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
-                    </button>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto p-3">
-                    {reviewLoading ? (
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                        AI 正在分析…
-                      </div>
-                    ) : reviewKind === 'extract' ? (
-                      <div className="space-y-3">
-                        {(() => {
-                          try {
-                            const combined = JSON.parse(reviewText)
-                            return (
-                              <>
-                                {combined.settings && (
-                                  <div>
-                                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">设定提取</div>
-                                    <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{combined.settings}</pre>
-                                  </div>
-                                )}
-                                {combined.voice && (
-                                  <div>
-                                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">语音档案</div>
-                                    <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{combined.voice}</pre>
-                                  </div>
-                                )}
-                              </>
-                            )
-                          } catch {
-                            return <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{reviewText}</pre>
-                          }
-                        })()}
-                      </div>
-                    ) : (
-                      <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{reviewText}</pre>
-                    )}
-                  </div>
-                  {!reviewLoading && reviewText && (
-                    <div className="flex flex-col gap-2 border-t px-3 py-2">
-                      {/* Progress bar when applying chapter review */}
-                      {applyProgress && (
-                        <div className="space-y-1">
-                          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                            <span className="flex items-center gap-1.5">
-                              <div className="h-2 w-2 animate-spin rounded-full border border-primary border-t-transparent" />
-                              正在重写: {applyProgress.sceneTitle}
-                            </span>
-                            <span className="font-mono tabular-nums">{applyProgress.current}/{applyProgress.total}</span>
-                          </div>
-                          <div className="h-1 w-full overflow-hidden rounded-full bg-background">
-                            <div
-                              className="h-full bg-primary transition-all duration-300"
-                              style={{ width: `${(applyProgress.current / applyProgress.total) * 100}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
-                      <div className="flex gap-2">
-                        {reviewKind === 'review' ? (
-                          <Button
-                            size="sm"
-                            className="flex-1 text-xs"
-                            disabled={applyLoading}
-                            onClick={() => applyReview('replace_all')}
-                          >
-                            <Check className="mr-1 h-3 w-3" />
-                            {applyLoading ? '应用中...' : reviewScope === 'chapter' ? `应用到整个章节 (${reviewTargets.length} 个场景)` : '应用到当前场景'}
-                          </Button>
-                        ) : (
-                          <Button
-                            size="sm"
-                            className="flex-1 text-xs"
-                            disabled={applyLoading}
-                            onClick={() => applyReview('extract')}
-                          >
-                            <Check className="mr-1 h-3 w-3" />
-                            保存到设定
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+              {/* Review panel moved out of {sceneId &&} below — see sibling block */}
             </>
           ) : (
             <EmptyState
@@ -1272,8 +1115,111 @@ ${sceneData.markdown}`
                   ? () => addChapter.mutate(outlineData.volumes[0]!.id)
                   : undefined
               }
-              onSkeleton={() => setSkeletonOpen(true)}
+              onStoryArc={() => setStoryArcOpen(true)}
             />
+          )}
+
+          {/* Review panel — lives OUTSIDE {sceneId &&} so chapter-level
+              review/extract (triggered from the outline sidebar) works even
+              when the user hasn't opened any scene. */}
+          {reviewOpen && (
+            <div className="fixed bottom-24 right-6 z-40 w-80 max-h-96 overflow-hidden rounded-xl border bg-background shadow-2xl">
+              <div className="flex items-center justify-between border-b px-3 py-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-semibold text-foreground">
+                    {reviewKind === 'review' ? '📖 审稿建议' : '🔍 设定提取'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  onClick={() => { setReviewOpen(false); setApplyProgress(null) }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                </button>
+              </div>
+              <div className="max-h-64 overflow-y-auto p-3">
+                {reviewLoading ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                    AI 正在分析…
+                  </div>
+                ) : reviewKind === 'extract' ? (
+                  <div className="space-y-3">
+                    {(() => {
+                      try {
+                        const combined = JSON.parse(reviewText)
+                        return (
+                          <>
+                            {combined.settings && (
+                              <div>
+                                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">设定提取</div>
+                                <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{combined.settings}</pre>
+                              </div>
+                            )}
+                            {combined.voice && (
+                              <div>
+                                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">语音档案</div>
+                                <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{combined.voice}</pre>
+                              </div>
+                            )}
+                          </>
+                        )
+                      } catch {
+                        return <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{reviewText}</pre>
+                      }
+                    })()}
+                  </div>
+                ) : (
+                  <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{reviewText}</pre>
+                )}
+              </div>
+              {!reviewLoading && reviewText && (
+                <div className="flex flex-col gap-2 border-t px-3 py-2">
+                  {/* Progress bar when applying chapter review */}
+                  {applyProgress && (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                        <span className="flex items-center gap-1.5">
+                          <div className="h-2 w-2 animate-spin rounded-full border border-primary border-t-transparent" />
+                          正在重写: {applyProgress.sceneTitle}
+                        </span>
+                        <span className="font-mono tabular-nums">{applyProgress.current}/{applyProgress.total}</span>
+                      </div>
+                      <div className="h-1 w-full overflow-hidden rounded-full bg-background">
+                        <div
+                          className="h-full bg-primary transition-all duration-300"
+                          style={{ width: `${(applyProgress.current / applyProgress.total) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    {reviewKind === 'review' ? (
+                      <Button
+                        size="sm"
+                        className="flex-1 text-xs"
+                        disabled={applyLoading}
+                        onClick={() => applyReview('replace_all')}
+                      >
+                        <Check className="mr-1 h-3 w-3" />
+                        {applyLoading ? '应用中...' : `应用到整个章节 (${reviewTargets.length} 个场景)`}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        className="flex-1 text-xs"
+                        disabled={applyLoading}
+                        onClick={() => applyReview('extract')}
+                      >
+                        <Check className="mr-1 h-3 w-3" />
+                        保存到设定
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
           {sceneId && (
@@ -1397,10 +1343,10 @@ ${sceneData.markdown}`
         </main>
       </div>
 
-      {skeletonOpen && (
-        <SkeletonGenerator
-          open={skeletonOpen}
-          onOpenChange={setSkeletonOpen}
+      {storyArcOpen && (
+        <StoryArcGenerator
+          open={storyArcOpen}
+          onOpenChange={setStoryArcOpen}
           projectId={projectId}
           model={settings.data?.model ?? 'gpt-4o-mini'}
         />
@@ -1412,11 +1358,11 @@ ${sceneData.markdown}`
 function EmptyState({
   onAddScene,
   onAddChapter,
-  onSkeleton,
+  onStoryArc,
 }: {
   onAddScene?: (() => void) | undefined
   onAddChapter?: (() => void) | undefined
-  onSkeleton?: () => void
+  onStoryArc?: () => void
 }) {
   return (
     <div className="flex flex-1 items-center justify-center p-8">
@@ -1440,9 +1386,9 @@ function EmptyState({
                 <BookPlus className="h-3.5 w-3.5" /> 新建章节
               </Button>
             )}
-            {onSkeleton && (
-              <Button size="sm" variant="outline" onClick={onSkeleton}>
-                <Sparkles className="h-3.5 w-3.5" /> AI 生成骨架
+            {onStoryArc && (
+              <Button size="sm" variant="outline" onClick={onStoryArc}>
+                <Sparkles className="h-3.5 w-3.5" /> 生成故事弧线
               </Button>
             )}
           </div>

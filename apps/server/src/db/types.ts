@@ -24,6 +24,7 @@ export interface ChapterRow {
   title: string
   order_index: number
   status: 'draft' | 'revising' | 'done'
+  summary: string
 }
 
 export interface SceneRow {

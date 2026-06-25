@@ -9,8 +9,11 @@ import { DraftStore } from '../ai/draftStore.js'
 import { apiError } from '../errors.js'
 
 const completeBody = z.object({
-  sceneId: z.number().int(),
-  mode: z.enum(['continue', 'polish', 'rewrite', 'expand', 'condense', 'generate_scene', 'generate_chapter', 'generate_novel_skeleton', 'suggest_next_chapter', 'auto_review', 'plan_story_arc', 'analyze_voice', 'consistency_check', 'generate_character', 'generate_world', 'generate_timeline', 'generate_foreshadow', 'generate_conflict']),
+  sceneId: z.number().int().optional(),
+  // Prefer `projectId` over scene-derived lookup. Frontend always passes it
+  // (it's in the URL). Server still falls back to scene JOIN for legacy callers.
+  projectId: z.number().int().optional(),
+  mode: z.enum(['continue', 'polish', 'rewrite', 'expand', 'condense', 'generate_scene', 'generate_chapter', 'suggest_next_chapter', 'auto_review', 'plan_story_arc', 'analyze_voice', 'consistency_check', 'generate_character', 'generate_world', 'generate_timeline', 'generate_foreshadow', 'generate_conflict']),
   model: z.string().min(1),
   inputText: z.string(),
   overrideMessages: z.array(z.object({ role: z.enum(['system', 'user', 'assistant']), content: z.string() })).optional(),
@@ -63,11 +66,15 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
     const providerId = registry.getDefaultConfig()?.id
     if (!providerId) throw apiError(409, 'no_provider', 'no AI provider configured')
 
-    // Modes that don't need a real sceneId
-    const noSceneNeeded = ['generate_novel_skeleton']
-
+    // Resolve ai_settings: prefer explicit projectId, else fall back to scene JOIN.
     let aiRow: { system_prompt: string; context_prev_chars: number } | undefined
-    if (!noSceneNeeded.includes(body.mode)) {
+    if (body.projectId !== undefined) {
+      aiRow = db
+        .prepare<{ system_prompt: string; context_prev_chars: number }>(
+          'SELECT system_prompt, context_prev_chars FROM ai_settings WHERE project_id = ?',
+        )
+        .get(body.projectId)
+    } else if (body.sceneId !== undefined) {
       aiRow = db
         .prepare<{ system_prompt: string; context_prev_chars: number }>(
           'SELECT system_prompt, context_prev_chars FROM ai_settings WHERE project_id = (SELECT project_id FROM scenes s JOIN chapters c ON s.chapter_id = c.id JOIN volumes v ON c.volume_id = v.id WHERE s.id = ?)',
@@ -82,7 +89,8 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
     try {
       ctx = await buildContext({
         db,
-        sceneId: body.sceneId,
+        ...(body.sceneId !== undefined ? { sceneId: body.sceneId } : {}),
+        ...(body.projectId !== undefined ? { projectId: body.projectId } : {}),
         novelsDir,
         mode: body.mode,
         systemPrompt: aiRow.system_prompt,
@@ -101,12 +109,12 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
       }
     }
     // Resolve project_id for draft (FK requirement).
+    // Order: explicit projectId → scene JOIN.
     // Must be done BEFORE writeHead because we may need to return an error.
     let projectId: number | null = null
-    if (body.mode === 'generate_novel_skeleton') {
-      const draftProjectId = (req.body as { draftProjectId?: number } | undefined)?.draftProjectId
-      if (typeof draftProjectId === 'number') projectId = draftProjectId
-    } else {
+    if (typeof body.projectId === 'number') {
+      projectId = body.projectId
+    } else if (body.sceneId !== undefined) {
       const row = db
         .prepare<{ project_id: number }>(
           'SELECT v.project_id as project_id FROM scenes s JOIN chapters c ON s.chapter_id = c.id JOIN volumes v ON c.volume_id = v.id WHERE s.id = ?',
@@ -131,7 +139,7 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
     if (!draft) {
       draft = draftStore.create({
         projectId,
-        sceneId: body.mode === 'generate_novel_skeleton' ? null : body.sceneId,
+        sceneId: body.sceneId,
         mode: body.mode,
         model: body.model,
         maxOutputTokens: ctx.modelMaxTokens ?? 0,
@@ -140,7 +148,7 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
       // Resuming after completion: create a fresh draft for the new run.
       draft = draftStore.create({
         projectId,
-        sceneId: body.mode === 'generate_novel_skeleton' ? null : body.sceneId,
+        sceneId: body.sceneId,
         mode: body.mode,
         model: body.model,
         maxOutputTokens: ctx.modelMaxTokens ?? 0,

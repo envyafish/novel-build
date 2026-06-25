@@ -71,22 +71,28 @@ ${ctx}
 ${input}`,
   },
   consistency_check: {
-    system: 'You are a novel editing assistant specializing in consistency analysis and world-building extraction. Output valid JSON only, no markdown code blocks.',
+    system:
+      'You are a novel world-building extraction assistant. Your sole task is to read the provided scene/chapter text and extract entities into a strict JSON object. Do NOT perform consistency analysis, evaluation, or critique. Do NOT write prose or commentary. Output ONLY the JSON object — your entire response must start with `{` and end with `}`.',
     buildUser: (input, ctx) =>
-      `分析以下场景，输出一致性报告，并从场景中提取可保存到世界观数据库的信息。
+      `任务:从以下小说文本中,提取可保存到世界观数据库的结构化信息,输出严格的 JSON。
 
-输出严格的JSON格式（不要markdown代码块）：
+【核心约束】
+- 这是**提取任务**,不是分析任务,不是评估任务。
+- **不要做一致性分析**（不要输出"通过/注意/不一致"之类的判断,不要 report 字段）。
+- 字段缺失时填空数组(空数组),不要用散文解释。
+- 所有字段用中文。
+
+【输出 Schema】
 
 {
-  "report": "一致性分析报告，用中文写，包含：\\n✅ 通过项\\n⚠️ 需注意\\n❌ 不一致",
   "characters": [
-    { "name": "姓名", "aliases": [], "appearance": "外貌", "personality": "性格", "background": "背景", "relationships": "关系", "voiceProfile": "语音档案：说话风格 / 用词特征 / 语气特点 / 口头禅 / 句式习惯 / 情感表达方式" }
+    { "name": "姓名", "aliases": [], "appearance": "外貌(从文本中直接提取)", "personality": "性格(从文本中直接提取)", "background": "背景(从文本中直接提取)", "relationships": "关系(从文本中直接提取)", "voiceProfile": "语音档案:说话风格 / 用词特征 / 语气特点 / 口头禅 / 句式习惯 / 情感表达方式" }
   ],
   "worldElements": [
-    { "name": "名称", "category": "location/organization/item/concept/rule", "description": "描述" }
+    { "name": "名称", "category": "location/organization/item/concept/rule", "description": "描述(从文本中直接提取)" }
   ],
   "timeline": [
-    { "title": "事件标题", "era": "时间标记", "description": "描述" }
+    { "title": "事件标题", "era": "时间标记", "description": "事件描述(从文本中直接提取)" }
   ],
   "foreshadows": [
     { "title": "伏笔标题", "description": "描述", "status": "planted/revealed/resolved" }
@@ -96,16 +102,22 @@ ${input}`,
   ]
 }
 
-注意：
-- 只输出场景中明确出现的新信息或变更
-- 如果某个类别没有新信息，输出空数组 []
-- 如果已有设定与场景一致，不要重复输出
-- 如果发现不一致，在report中说明，但仍然提取正确的信息
+【提取规则】
+- characters:从文本中明确列出的人物提取(姓名 + 性格 + 关系等字段)。未提及的字段填空字符串。没列出的人物不要造。
+- worldElements:从文本中提到的地点/组织/物品/概念/规则提取,未提及的不要造。
+- timeline:从文本中提到的时间标记(年份、季节、相对时间)提取事件。
+- foreshadows/conflicts:从文本中暗示或明示的伏笔/冲突线索提取。
 
-[已有设定]
+【注意】
+- 只输出 JSON,不要 markdown 代码块。
+- 不要任何前言、后记、评估报告。
+- 不要使用 \`thinking\` / \`<think>\` 等标签。
+- 如果文本中没有可提取的信息,所有数组输出空数组。
+
+【已有设定(用于去重参考,不要重复提取已在设定中的内容)】
 ${ctx}
 
-[场景内容]
+【文本内容】
 ${input}`,
   },
   generate_character: {
@@ -181,70 +193,6 @@ ${input}`,
 ${ctx}
 
 [伏笔描述]
-${input}`,
-  },
-  generate_novel_skeleton: {
-    system: 'You are a master novelist and world-builder. Output valid JSON only, no markdown code blocks.',
-    buildUser: (input) =>
-      `根据以下小说设定，生成完整的小说骨架（人物、世界观、时间线、大纲结构、故事弧线）。输出严格的 JSON 格式（不要 markdown 代码块）：
-
-{
-  "title": "小说标题",
-  "theme": "小说主题（一句话概括核心思想）",
-  "characters": [
-    {
-      "name": "姓名",
-      "aliases": ["别名"],
-      "appearance": "外貌描写",
-      "personality": "性格特点",
-      "background": "背景故事",
-      "relationships": "与其他人物的关系"
-    }
-  ],
-  "worldElements": [
-    {
-      "name": "名称",
-      "category": "location/organization/item/concept/rule",
-      "description": "描述"
-    }
-  ],
-  "timeline": [
-    {
-      "title": "事件标题",
-      "era": "时间标记（如：第一纪元/现代）",
-      "description": "事件描述"
-    }
-  ],
-  "volumes": [
-    {
-      "name": "卷名",
-      "chapters": [
-        {
-          "title": "章标题",
-          "scenes": [
-            { "title": "场景标题", "description": "场景的简要描述（50-100字）" }
-          ]
-        }
-      ]
-    }
-  ],
-  "storyArcNotes": "# 故事弧线规划\\n\\n## 第一卷：[卷名]\\n**核心冲突**：[一句话]\\n**情绪节奏**：起-承-转-合\\n\\n### 第1章：[章标题]\\n[概述]\\n...\\n\\n## 伏笔布局\\n- [伏笔1] → 埋设于第X卷第Y章，揭示于第X卷第Y章\\n\\n## 人物成长线\\n- [角色名]：[成长弧线描述]"
-}
-
-要求：
-- 生成 3-6 个人物（含主角、关键配角和反派）
-- 生成 5-10 个世界观设定
-- 生成 3-6 个时间线事件
-- 生成 1-2 卷，每卷 3-5 章，每章 2-4 个场景
-- 场景描述要具体，能直接用于生成场景内容
-- storyArcNotes 字段用 Markdown 格式写出完整的故事弧线规划，包含：
-  - 每卷的核心冲突和情绪节奏
-  - 每章的情节概述
-  - 伏笔的埋设和揭示位置
-  - 人物成长的关键转折点
-- 所有内容用中文
-
-[小说设定]
 ${input}`,
   },
   generate_conflict: {

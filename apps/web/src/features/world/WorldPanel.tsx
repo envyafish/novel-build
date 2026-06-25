@@ -4,6 +4,7 @@ import { Plus, Trash2, Edit3, Users, Settings, Clock, Eye, ChevronDown, ChevronR
 import type { CharacterDto, WorldElementDto, TimelineEventDto, ForeshadowDto, ConflictDto, WorldCategory, ForeshadowStatus, ConflictType, ConflictPhase, CompletionMode } from '@novel/shared'
 import { worldApi } from './api.js'
 import { useAiStream } from '../../hooks/useAiStream.js'
+import { parseAiJson } from '../ai/jsonParse.js'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -119,17 +120,13 @@ function AiGenerateSection({
 
   // Auto-parse JSON when done
   if (state.status === 'done' && state.text) {
-    try {
-      // Try to extract JSON from the response
-      const jsonMatch = state.text.match(/\{[\s\S]*\}/)
-      if (jsonMatch) {
-        JSON.parse(jsonMatch[0]) // Validate it's valid JSON
-        onGenerated(jsonMatch[0])
-        reset()
-      }
-    } catch {
-      // Not valid JSON yet, show the output
+    const parsed = parseAiJson<Record<string, unknown>>(state.text)
+    if (parsed !== null) {
+      onGenerated(JSON.stringify(parsed))
+      reset()
     }
+    // If parseAiJson returns null, fall through and show the raw output so the
+    // user can see what came back and try again or copy it.
   }
 
   return (
