@@ -89,6 +89,7 @@ export interface CharacterDto {
   personality: string
   background: string
   relationships: string
+  voiceProfile: string
   notes: string
   createdAt: string
   updatedAt: string

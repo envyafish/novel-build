@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { sha256 } from './hash.js'
+import { recordSelfWrite } from './selfWriteRegistry.js'
 
 export async function readManuscript(filePath: string): Promise<{ text: string; hash: string }> {
   let text: string
@@ -24,5 +25,6 @@ export async function writeManuscript(filePath: string, text: string): Promise<s
   await fh.sync()
   await fh.close()
   await fs.rename(tmp, filePath)
+  recordSelfWrite(filePath, hash)
   return hash
 }

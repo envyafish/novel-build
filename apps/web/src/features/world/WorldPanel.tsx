@@ -198,6 +198,7 @@ function CharactersTab({ projectId, qc, model }: { projectId: number; qc: Return
         personality: data.personality || '',
         background: data.background || '',
         relationships: data.relationships || '',
+        voiceProfile: data.voiceProfile || '',
         notes: data.notes || '',
       })
     } catch {
@@ -253,6 +254,7 @@ function CharacterCard({ item, isEditing, onEdit, onCancel, projectId, qc, onDel
           {item.appearance && <p><strong>外貌:</strong> {item.appearance}</p>}
           {item.background && <p><strong>背景:</strong> {item.background}</p>}
           {item.relationships && <p><strong>关系:</strong> {item.relationships}</p>}
+          {item.voiceProfile && <p className="whitespace-pre-wrap"><strong>语音档案:</strong> {item.voiceProfile}</p>}
           {item.notes && <p><strong>备注:</strong> {item.notes}</p>}
         </div>
       )}
@@ -267,11 +269,12 @@ function CharacterForm({ projectId, qc, initial, onCancel }: { projectId: number
   const [appearance, setAppearance] = useState(initial?.appearance ?? '')
   const [background, setBackground] = useState(initial?.background ?? '')
   const [relationships, setRelationships] = useState(initial?.relationships ?? '')
+  const [voiceProfile, setVoiceProfile] = useState(initial?.voiceProfile ?? '')
   const [notes, setNotes] = useState(initial?.notes ?? '')
 
   const save = useMutation({
     mutationFn: () => {
-      const data = { name, aliases: aliases.split(',').map(s => s.trim()).filter(Boolean), personality, appearance, background, relationships, notes }
+      const data = { name, aliases: aliases.split(',').map(s => s.trim()).filter(Boolean), personality, appearance, background, relationships, voiceProfile, notes }
       return initial ? worldApi.updateCharacter(initial.id, data) : worldApi.createCharacter(projectId, data)
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['characters', projectId] }); onCancel() },
@@ -285,6 +288,7 @@ function CharacterForm({ projectId, qc, initial, onCancel }: { projectId: number
       <Textarea placeholder="外貌" value={appearance} onChange={(e) => setAppearance(e.target.value)} rows={2} />
       <Textarea placeholder="背景" value={background} onChange={(e) => setBackground(e.target.value)} rows={2} />
       <Textarea placeholder="人物关系" value={relationships} onChange={(e) => setRelationships(e.target.value)} rows={2} />
+      <Textarea placeholder="语音档案" value={voiceProfile} onChange={(e) => setVoiceProfile(e.target.value)} rows={3} />
       <Textarea placeholder="备注" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
       <div className="flex gap-2">
         <Button size="sm" disabled={!name || save.isPending} onClick={() => save.mutate()}>

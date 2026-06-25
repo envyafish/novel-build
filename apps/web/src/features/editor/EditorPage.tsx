@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Sparkles, FilePlus, BookPlus, Settings as SettingsIcon, Focus as FocusIcon, Camera, BookOpen, Globe, FileText, Wand2, Check, Save, ChevronDown, ShieldCheck, PenLine, RotateCcw, ArrowLeft } from 'lucide-react'
+import { Sparkles, FilePlus, BookPlus, Settings as SettingsIcon, Focus as FocusIcon, Camera, BookOpen, Globe, FileText, Wand2, Check, Save, ChevronDown, ShieldCheck, PenLine, RotateCcw, ArrowLeft, Trash2 } from 'lucide-react'
 import { api, ApiClientError } from '../../api/client.js'
-import type { SceneDetailDto, AiSettingsDto, EntityStatus, ProjectDto, WorldCategory, ConflictType, ForeshadowStatus } from '@novel/shared'
+import type { SceneDetailDto, AiSettingsDto, EntityStatus, ProjectDto, WorldCategory, ConflictType, ForeshadowStatus, CompletionMode } from '@novel/shared'
 import { SceneEditor } from './SceneEditor.js'
 import { SnapshotHistory } from './SnapshotHistory.js'
 import { OutlineTree } from '../outline/OutlineTree.js'
@@ -13,7 +13,7 @@ import { AiPanelSheet } from '../ai/AiPanel.js'
 import { WorldPanel } from '../world/WorldPanel.js'
 import { worldApi } from '../world/api.js'
 import { formatAiOutput } from '../ai/format.js'
-import { titleToSlug, splitChapterToScenes } from '../ai/sceneSplitter.js'
+import { titleToSlug, splitChapterToScenes, type ParsedScene } from '../ai/sceneSplitter.js'
 import { parseAiJson } from '../ai/jsonParse.js'
 import { runAiCompletion } from '../ai/runAi.js'
 import { draftsApi, type DraftDto } from '../ai/draftsApi.js'
@@ -51,8 +51,11 @@ export function EditorPage() {
   const [reviewKind, setReviewKind] = useState<'review' | 'extract'>('review')
   const [reviewMenuOpen, setReviewMenuOpen] = useState(false)
   const [reviewChapterScenes, setReviewChapterScenes] = useState<Array<{ title: string; id: number }>>([])
+  // Snapshot of the scenes the review is *targeting* — locked at review time
+  // so that applying the review after navigating to a different scene still
+  // writes to the originally reviewed scene.
+  const [reviewTargets, setReviewTargets] = useState<Array<{ title: string; id: number }>>([])
   const [applyProgress, setApplyProgress] = useState<{ current: number; total: number; sceneTitle: string } | null>(null)
-  const [applyCompleted, setApplyCompleted] = useState(false)
   const [applyLoading, setApplyLoading] = useState(false)
 
   // Restore review state from localStorage on mount (persists across refresh)
@@ -64,7 +67,6 @@ export function EditorPage() {
         if (data.reviewText) setReviewText(data.reviewText)
         if (data.reviewKind) setReviewKind(data.reviewKind)
         if (data.reviewScope) setReviewScope(data.reviewScope)
-        if (data.applyCompleted) setApplyCompleted(data.applyCompleted)
         if (data.reviewText) setReviewOpen(true)
       }
     } catch { /* ignore */ }
@@ -78,11 +80,10 @@ export function EditorPage() {
           reviewText,
           reviewKind,
           reviewScope,
-          applyCompleted,
         }))
       } catch { /* ignore */ }
     }
-  }, [reviewText, reviewKind, reviewScope, applyCompleted, projectId, sceneId])
+  }, [reviewText, reviewKind, reviewScope, projectId, sceneId])
   const [saveState, setSaveState] = useState<SaveState>('idle')
   const [lastSavedAt, setLastSavedAt] = useState<number | undefined>(undefined)
   const [saveError, setSaveError] = useState<string | undefined>(undefined)
@@ -477,7 +478,10 @@ export function EditorPage() {
     return { text, titles }
   }
 
-  // Review/extract AI call
+  // Review/extract AI call. The targets (scene/chapter scenes) are *snapshotted
+  // here* — subsequent scene navigation does NOT change what the review is
+  // targeting, so applying the review never accidentally writes to a scene
+  // the user is merely looking at when they click "Apply".
   const runReview = useCallback(
     async (kind: 'review' | 'extract', scope: 'scene' | 'chapter') => {
       if (!sceneId) return
@@ -487,7 +491,7 @@ export function EditorPage() {
       setReviewKind(kind)
       setReviewScope(scope)
       setReviewChapterScenes([])
-      setApplyCompleted(false)
+      setReviewTargets([])
       try {
         let inputText = content
         if (scope === 'chapter') {
@@ -495,18 +499,28 @@ export function EditorPage() {
           if (ch) {
             inputText = ch.text
             setReviewChapterScenes(ch.titles)
+            setReviewTargets(ch.titles)
+          }
+        } else {
+          // Scene scope: lock to the *current* scene at review time. If the
+          // user navigates away afterwards, `reviewTargets` keeps the original.
+          const cur = outlineData?.scenes.find((s) => s.id === sceneId)
+          if (cur) {
+            const target = [{ id: cur.id, title: cur.title }]
+            setReviewChapterScenes(target)
+            setReviewTargets(target)
           }
         }
         if (kind === 'review') {
           const text = await runAiFetch('auto_review', inputText)
           setReviewText(text)
         } else {
-          // Extract: run both consistency_check AND analyze_voice in parallel
-          const [settingsText, voiceText] = await Promise.all([
-            runAiFetch('consistency_check', inputText),
-            runAiFetch('analyze_voice', inputText),
-          ])
-          setReviewText(JSON.stringify({ settings: settingsText, voice: voiceText }))
+          // Extract: run consistency_check only. The `voice` slot is kept in
+          // the wrapper for backward compat with the parser below, but no
+          // longer triggers a separate AI call — voice profiles are now
+          // returned inside the consistency_check JSON as `voiceProfile`.
+          const settingsText = await runAiFetch('consistency_check', inputText)
+          setReviewText(JSON.stringify({ settings: settingsText, voice: '' }))
         }
       } catch (e) {
         setReviewText('错误: ' + (e as Error).message)
@@ -514,7 +528,99 @@ export function EditorPage() {
         setReviewLoading(false)
       }
     },
-    [sceneId, content, runAiFetch, getChapterContent],
+    [sceneId, content, runAiFetch, getChapterContent, outlineData],
+  )
+
+  // Apply a finalized AI text result to the project — shared between the
+  // "accept" button in the AI panel and the recovery banner for interrupted
+  // drafts. The `scenes` arg is only meaningful for `generate_chapter` mode
+  // (parsed scene list from the panel); the recovery path passes undefined
+  // and falls through to the default editor-application branch, which is the
+  // correct degraded behaviour for an interrupted chapter run.
+  const applyAcceptedText = useCallback(
+    async (
+      rawText: string,
+      mode: CompletionMode,
+      scope: 'full' | 'selection' | 'chapter' | 'generate' = 'full',
+      scenes?: ParsedScene[],
+    ) => {
+      const text = formatAiOutput(rawText)
+      if (mode === 'plan_story_arc') {
+        try {
+          await api(`/api/projects/${projectId}/story-arc`, {
+            method: 'PATCH',
+            body: JSON.stringify({ storyArcNotes: rawText }),
+          })
+          qc.invalidateQueries({ queryKey: ['project', projectId] })
+          toast({ kind: 'success', title: '故事弧线已保存到大纲笔记' })
+        } catch (e) {
+          toast({ kind: 'error', title: '保存失败', description: (e as Error).message })
+        }
+        return
+      }
+      if (mode === 'analyze_voice') {
+        try {
+          const sections = rawText.split(/##\s+/).filter(Boolean)
+          const chars = await worldApi.listCharacters(projectId)
+          let matched = 0
+          for (const sec of sections) {
+            const titleLine = sec.split('\n', 1)[0]?.trim()
+            if (!titleLine) continue
+            const existing = chars.find((c) => c.name === titleLine)
+            if (existing) {
+              await worldApi.updateCharacter(existing.id, { voiceProfile: sec })
+              matched++
+            }
+          }
+          qc.invalidateQueries({ queryKey: ['characters', projectId] })
+          toast({ kind: 'success', title: `语音档案已保存${matched > 0 ? `，匹配 ${matched} 个人物` : ''}` })
+        } catch (e) {
+          toast({ kind: 'error', title: '保存失败', description: (e as Error).message })
+        }
+        return
+      }
+      if (mode === 'generate_chapter' && scenes && scenes.length > 0) {
+        try {
+          const cs = outlineData?.scenes.find((s) => s.id === sceneId)
+          if (!cs) throw new Error('未找到当前章节')
+          for (let i = 0; i < scenes.length; i++) {
+            const s = scenes[i]!
+            const slug = titleToSlug(s.title, i)
+            const created = await outlineApi.createScene(cs.chapterId, slug, s.title)
+            if (s.markdown.trim()) {
+              await api(`/api/scenes/${created.id}`, {
+                method: 'PUT',
+                body: JSON.stringify({ markdown: s.markdown, baseHash: created.contentHash }),
+              })
+            }
+          }
+          qc.invalidateQueries({ queryKey: ['outline', projectId] })
+          toast({ kind: 'success', title: `已创建 ${scenes.length} 个场景` })
+        } catch (e) {
+          toast({ kind: 'error', title: '创建场景失败', description: (e as Error).message })
+        }
+        return
+      }
+      // Default: apply text to editor
+      if (editorApiRef.current) {
+        if (mode === 'continue') {
+          const merged = content.trimEnd() + '\n\n' + text
+          editorApiRef.current.setContentFromText(merged)
+        } else if (scope === 'selection' && selectionText) {
+          const replaced = content.replace(selectionText, text)
+          editorApiRef.current.setContentFromText(replaced)
+        } else {
+          editorApiRef.current.setContentFromText(text)
+        }
+      } else if (mode === 'continue') {
+        setContent((c) => c.trimEnd() + '\n\n' + text)
+      } else if (scope === 'selection' && selectionText) {
+        setContent((c) => c.replace(selectionText, text))
+      } else {
+        setContent(text)
+      }
+    },
+    [projectId, sceneId, content, selectionText, outlineData, qc, toast],
   )
 
   // Apply review: auto_review applies suggestions to current scene; consistency_check extracts settings to world
@@ -525,13 +631,15 @@ export function EditorPage() {
       setApplyProgress(null)
       try {
         if (action === 'replace_all') {
-          if (reviewScope === 'chapter' && reviewChapterScenes.length > 0) {
-            // Chapter-level review: re-run AI for each scene with the review feedback as context,
-            // then apply the rewritten content to each scene.
+          if (reviewScope === 'chapter' && reviewTargets.length > 0) {
+            // Chapter-level review: re-run AI for each *snapshotted* scene with
+            // the review feedback as context, then apply to each. The target
+            // list is locked — switching chapters after the review does not
+            // change what gets rewritten.
             let applied = 0
-            const total = reviewChapterScenes.length
+            const total = reviewTargets.length
             for (let i = 0; i < total; i++) {
-              const sc = reviewChapterScenes[i]!
+              const sc = reviewTargets[i]!
               setApplyProgress({ current: i + 1, total, sceneTitle: sc.title })
               try {
                 // Read current scene content
@@ -565,31 +673,51 @@ ${sceneText}`
             qc.invalidateQueries({ queryKey: ['outline', projectId] })
             qc.invalidateQueries({ queryKey: ['scene', sceneId] })
             toast({ kind: 'success', title: `审稿建议已应用到 ${applied} 个场景` })
-            setApplyCompleted(true)
           } else {
-            // Scene-level review: use review feedback as context to rewrite the scene via AI.
-            setApplyProgress({ current: 1, total: 1, sceneTitle: outlineData?.scenes.find((s) => s.id === sceneId)?.title ?? '当前场景' })
-            const sceneTitle = outlineData?.scenes.find((s) => s.id === sceneId)?.title ?? '当前场景'
+            // Scene-level review: rewrite the snapshotted scene (NOT the
+            // current one). If the target is the scene the user is currently
+            // viewing, also push the new content into the live editor.
+            const target = reviewTargets[0]!
+            setApplyProgress({ current: 1, total: 1, sceneTitle: target.title })
+            const sceneData = await api<{ markdown: string; baseHash: string }>(`/api/scenes/${target.id}`)
             const rewritePrompt = `以下是对场景的审稿反馈，请根据反馈重写这个场景。只输出重写后的内容，不要输出任何解释。
 
 [审稿反馈]
 ${reviewText}
 
 [场景标题]
-${sceneTitle}
+${target.title}
 
 [场景原文]
-${content}`
+${sceneData.markdown}`
             const rewritten = await runAiFetch('rewrite', rewritePrompt)
             const formatted = formatAiOutput(rewritten)
+            await api(`/api/scenes/${target.id}`, {
+              method: 'PUT',
+              body: JSON.stringify({ markdown: formatted, baseHash: sceneData.baseHash, force: true }),
+            })
             setApplyProgress(null)
-            if (editorApiRef.current) {
-              editorApiRef.current.setContentFromText(formatted)
+            qc.invalidateQueries({ queryKey: ['outline', projectId] })
+            qc.invalidateQueries({ queryKey: ['scene', sceneId] })
+            if (target.id === sceneId) {
+              // User is still viewing the scene they reviewed — show the
+              // rewrite in the editor immediately.
+              if (editorApiRef.current) {
+                editorApiRef.current.setContentFromText(formatted)
+              } else {
+                setContent(formatted)
+              }
+              toast({ kind: 'success', title: '审稿建议已应用到当前场景' })
             } else {
-              setContent(formatted)
+              // User has navigated to a different scene since reviewing. Don't
+              // touch what they're looking at — the rewrite went to the
+              // originally targeted scene on the server.
+              toast({
+                kind: 'success',
+                title: `审稿已应用到「${target.title}」`,
+                description: '已切换到其他场景，请在大纲中打开该场景查看',
+              })
             }
-            toast({ kind: 'success', title: '审稿建议已应用到当前场景' })
-            setApplyCompleted(true)
           }
         } else {
           // Extract: parse combined settings + voice result
@@ -655,6 +783,7 @@ ${content}`
                     personality: str(c.personality) || existing.personality,
                     background: str(c.background) || existing.background,
                     relationships: str(c.relationships) || existing.relationships,
+                    voiceProfile: str(c.voiceProfile) || existing.voiceProfile,
                     notes: mergedNotes,
                   })
                 } else {
@@ -665,6 +794,7 @@ ${content}`
                     personality: str(c.personality),
                     background: str(c.background),
                     relationships: str(c.relationships),
+                    voiceProfile: str(c.voiceProfile),
                     notes: str(c.notes),
                   })
                 }
@@ -779,28 +909,6 @@ ${content}`
               toast({ kind: 'error', title: '未找到有效的设定 JSON', description: 'AI 输出中未检测到结构化数据' })
               setApplyLoading(false)
               return
-            }
-          }
-
-          // 2. Save voice analysis to character notes
-          if (voiceText) {
-            const sections = voiceText.split(/##\s+/).filter(Boolean)
-            const existingChars = await worldApi.listCharacters(projectId)
-            let voiceMatched = 0
-            for (const sec of sections) {
-              const nameMatch = sec.match(/^人物名[：:]\s*(.+)/m)
-              if (!nameMatch) continue
-              const name = nameMatch[1]?.trim()
-              const existing = existingChars.find((c) => c.name === name)
-              if (existing) {
-                const existingNotes = existing.notes || ''
-                const separator = existingNotes ? '\n\n---\n\n' : ''
-                await worldApi.updateCharacter(existing.id, { notes: existingNotes + separator + sec })
-                voiceMatched++
-              }
-            }
-            if (voiceMatched > 0) {
-              toast({ kind: 'info', title: `语音档案已匹配 ${voiceMatched} 个人物` })
             }
           }
 
@@ -1052,7 +1160,7 @@ ${content}`
                         type="button"
                         className="rounded p-0.5 text-muted-foreground hover:text-foreground"
                         title="返回选项"
-                        onClick={() => { setReviewOpen(false); setReviewMenuOpen(true); setApplyProgress(null); setApplyCompleted(false) }}
+                        onClick={() => { setReviewOpen(false); setReviewMenuOpen(true); setApplyProgress(null) }}
                       >
                         <ArrowLeft className="h-3.5 w-3.5" />
                       </button>
@@ -1063,7 +1171,7 @@ ${content}`
                     <button
                       type="button"
                       className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-                      onClick={() => { setReviewOpen(false); setApplyProgress(null); setApplyCompleted(false) }}
+                      onClick={() => { setReviewOpen(false); setApplyProgress(null) }}
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
                     </button>
@@ -1126,28 +1234,15 @@ ${content}`
                       )}
                       <div className="flex gap-2">
                         {reviewKind === 'review' ? (
-                          applyCompleted ? (
-                            // After application completes, show extract button
-                            <Button
-                              size="sm"
-                              className="flex-1 text-xs"
-                              disabled={applyLoading}
-                              onClick={() => runReview('extract', reviewScope)}
-                            >
-                              <Check className="mr-1 h-3 w-3" />
-                              提取设定到数据库
-                            </Button>
-                          ) : (
-                            <Button
-                              size="sm"
-                              className="flex-1 text-xs"
-                              disabled={applyLoading}
-                              onClick={() => applyReview('replace_all')}
-                            >
-                              <Check className="mr-1 h-3 w-3" />
-                              {applyLoading ? '应用中...' : reviewScope === 'chapter' ? `应用到整个章节 (${reviewChapterScenes.length} 个场景)` : '应用到当前场景'}
-                            </Button>
-                          )
+                          <Button
+                            size="sm"
+                            className="flex-1 text-xs"
+                            disabled={applyLoading}
+                            onClick={() => applyReview('replace_all')}
+                          >
+                            <Check className="mr-1 h-3 w-3" />
+                            {applyLoading ? '应用中...' : reviewScope === 'chapter' ? `应用到整个章节 (${reviewTargets.length} 个场景)` : '应用到当前场景'}
+                          </Button>
                         ) : (
                           <Button
                             size="sm"
@@ -1183,38 +1278,50 @@ ${content}`
 
           {sceneId && (
             <>
-              {/* Show recovery banner if there's an in-flight draft for this scene */}
+              {/* Show recovery panel if there's an in-flight draft for this scene.
+              Lets the user read the already-generated text, accept it
+              (applies via the same code path as the AI panel's accept
+              button), discard it, or — only on explicit choice — open the
+              AI panel to start a brand-new generation. */}
               {recoverDraft && !aiOpen && (
-                <div className="fixed bottom-24 right-6 z-40 w-80 overflow-hidden rounded-xl border bg-background shadow-2xl">
+                <div className="fixed bottom-24 right-6 z-40 flex w-[28rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border bg-background shadow-2xl">
                   <div className="flex items-center gap-2 border-b px-3 py-2 text-xs">
                     <div className="h-2 w-2 animate-pulse rounded-full bg-primary" />
                     <span className="font-semibold text-foreground">AI 生成中断</span>
                     <span className="flex-1 truncate text-muted-foreground">
                       {recoverDraft.mode === 'continue' ? '续写' :
                        recoverDraft.mode === 'polish' ? '润色' :
+                       recoverDraft.mode === 'rewrite' ? '重写' :
+                       recoverDraft.mode === 'expand' ? '扩写' :
+                       recoverDraft.mode === 'condense' ? '压缩' :
                        recoverDraft.mode === 'generate_chapter' ? '生成章节' :
                        recoverDraft.mode === 'generate_scene' ? '生成场景' :
                        recoverDraft.mode === 'consistency_check' ? '一致性检查' :
                        recoverDraft.mode === 'auto_review' ? '审稿' :
+                       recoverDraft.mode === 'plan_story_arc' ? '故事弧线' :
+                       recoverDraft.mode === 'analyze_voice' ? '语音档案' :
                        recoverDraft.mode}
+                    </span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono tabular-nums text-muted-foreground">
+                      {recoverDraft.status === 'streaming' ? '中断' : recoverDraft.status}
                     </span>
                     <button
                       type="button"
                       onClick={() => setRecoverDraft(undefined)}
                       className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                      title="关闭（保留草稿，下次回来还能恢复）"
                     >
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
                     </button>
                   </div>
-                  <div className="flex gap-2 px-3 py-2">
-                    <Button
-                      size="sm"
-                      className="flex-1 text-xs"
-                      onClick={() => void handleOpenAi()}
-                    >
-                      <RotateCcw className="mr-1 h-3 w-3" />
-                      恢复（已 {recoverDraft.text.length} 字）
-                    </Button>
+                  <div className="max-h-64 overflow-y-auto px-3 py-2 text-xs leading-relaxed">
+                    {recoverDraft.text ? (
+                      <pre className="whitespace-pre-wrap font-sans text-foreground">{recoverDraft.text}</pre>
+                    ) : (
+                      <div className="text-muted-foreground">（还没有生成任何文本）</div>
+                    )}
+                  </div>
+                  <div className="flex gap-2 border-t px-3 py-2">
                     <Button
                       size="sm"
                       variant="outline"
@@ -1224,7 +1331,33 @@ ${content}`
                         setRecoverDraft(undefined)
                       }}
                     >
-                      丢弃
+                      <Trash2 className="mr-1 h-3 w-3" /> 丢弃
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs"
+                      onClick={() => void handleOpenAi()}
+                      title="打开 AI 面板开始新一轮生成（不会恢复已生成文本）"
+                    >
+                      <Wand2 className="mr-1 h-3 w-3" /> 重新生成
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="flex-1 text-xs"
+                      disabled={!recoverDraft.text}
+                      onClick={async () => {
+                        const mode = recoverDraft.mode as CompletionMode
+                        await applyAcceptedText(recoverDraft.text, mode)
+                        await draftsApi.remove(recoverDraft.id).catch(() => {})
+                        setRecoverDraft(undefined)
+                        setAiOpen(false)
+                        if (mode !== 'plan_story_arc' && mode !== 'analyze_voice' && mode !== 'generate_chapter') {
+                          toast({ kind: 'success', title: '已接受已生成内容' })
+                        }
+                      }}
+                    >
+                      <Check className="mr-1 h-3 w-3" /> 接受（{recoverDraft.text.length} 字）
                     </Button>
                   </div>
                 </div>
@@ -1248,94 +1381,15 @@ ${content}`
                 aiReset={aiReset}
                 aiAccept={aiAccept}
               onAccept={async (rawText, mode, scope, scenes) => {
-                const text = formatAiOutput(rawText)
-                if (mode === 'plan_story_arc') {
-                  // Save story arc notes to project
-                  try {
-                    await api(`/api/projects/${projectId}/story-arc`, {
-                      method: 'PATCH',
-                      body: JSON.stringify({ storyArcNotes: rawText }),
-                    })
-                    qc.invalidateQueries({ queryKey: ['project', projectId] })
-                    toast({ kind: 'success', title: '故事弧线已保存到大纲笔记' })
-                  } catch (e) {
-                    toast({ kind: 'error', title: '保存失败', description: (e as Error).message })
-                  }
-                  setAiOpen(false)
-                  return
-                }
-                if (mode === 'analyze_voice') {
-                  // Auto-match voice profiles to existing characters
-                  try {
-                    const sections = rawText.split(/##\s+/).filter(Boolean)
-                    let matched = 0
-                    for (const sec of sections) {
-                      const nameMatch = sec.match(/^人物名[：:]\s*(.+)/m)
-                      if (!nameMatch) continue
-                      const name = nameMatch[1]?.trim()
-                      const chars = await worldApi.listCharacters(projectId)
-                      const existing = chars.find((c) => c.name === name)
-                      if (existing) {
-                        // Append voice analysis to existing notes, don't overwrite
-                        const existingNotes = existing.notes || ''
-                        const separator = existingNotes ? '\n\n---\n\n' : ''
-                        await worldApi.updateCharacter(existing.id, { notes: existingNotes + separator + sec })
-                        matched++
-                      }
-                    }
-                    qc.invalidateQueries({ queryKey: ['characters', projectId] })
-                    toast({ kind: 'success', title: `语音档案已保存${matched > 0 ? `，匹配 ${matched} 个人物` : ''}` })
-                  } catch (e) {
-                    toast({ kind: 'error', title: '保存失败', description: (e as Error).message })
-                  }
-                  setAiOpen(false)
-                  return
-                }
-                if (mode === 'generate_chapter' && scenes && scenes.length > 0) {
-                  // Create multiple scenes in current chapter with content
-                  try {
-                    const cs = outlineData?.scenes.find((s) => s.id === sceneId)
-                    if (!cs) throw new Error('未找到当前章节')
-                    for (let i = 0; i < scenes.length; i++) {
-                      const s = scenes[i]!
-                      const slug = titleToSlug(s.title, i)
-                      const created = await outlineApi.createScene(cs.chapterId, slug, s.title)
-                      // Save markdown content to the newly created scene
-                      if (s.markdown.trim()) {
-                        await api(`/api/scenes/${created.id}`, {
-                          method: 'PUT',
-                          body: JSON.stringify({ markdown: s.markdown, baseHash: created.contentHash }),
-                        })
-                      }
-                    }
-                    qc.invalidateQueries({ queryKey: ['outline', projectId] })
-                    toast({ kind: 'success', title: `已创建 ${scenes.length} 个场景` })
-                  } catch (e) {
-                    toast({ kind: 'error', title: '创建场景失败', description: (e as Error).message })
-                  }
-                  setAiOpen(false)
-                  return
-                }
-                // Default: apply text to editor
-                if (editorApiRef.current) {
-                  if (mode === 'continue') {
-                    const merged = content.trimEnd() + '\n\n' + text
-                    editorApiRef.current.setContentFromText(merged)
-                  } else if (scope === 'selection' && selectionText) {
-                    const replaced = content.replace(selectionText, text)
-                    editorApiRef.current.setContentFromText(replaced)
-                  } else {
-                    editorApiRef.current.setContentFromText(text)
-                  }
-                } else if (mode === 'continue') {
-                  setContent((c) => c.trimEnd() + '\n\n' + text)
-                } else if (scope === 'selection' && selectionText) {
-                  setContent((c) => c.replace(selectionText, text))
-                } else {
-                  setContent(text)
-                }
+                await applyAcceptedText(rawText, mode, scope, scenes)
                 setAiOpen(false)
-                toast({ kind: 'success', title: '已应用到编辑器' })
+                // Generate-mode and generate-chapter-mode flows already
+                // show their own success toasts inside applyAcceptedText.
+                // For the default editor-application path, surface a toast
+                // so the user gets explicit feedback.
+                if (mode !== 'plan_story_arc' && mode !== 'analyze_voice' && mode !== 'generate_chapter') {
+                  toast({ kind: 'success', title: '已应用到编辑器' })
+                }
               }}
             />
             </>

@@ -62,4 +62,42 @@ describe('world routes require existing projectId', () => {
     expect(res.json().name).toBe('李逍遥')
     await app.close()
   })
+
+  it('POST character defaults voiceProfile to empty string', async () => {
+    const { app } = await buildServer({ enableExternalScan: false, silentLogger: true })
+    const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'X', slug: 'x' } })).json()
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${p.id}/characters`,
+      payload: { name: '赵灵儿' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().voiceProfile).toBe('')
+    await app.close()
+  })
+
+  it('PUT character persists voiceProfile and GET returns it', async () => {
+    const { app } = await buildServer({ enableExternalScan: false, silentLogger: true })
+    const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'X', slug: 'x' } })).json()
+    const created = (await app.inject({
+      method: 'POST',
+      url: `/api/projects/${p.id}/characters`,
+      payload: { name: '林月如' },
+    })).json()
+
+    const voiceText = '说话风格：爽朗直率\n用词特征：爱用俚语\n口头禅：「哼，本姑娘可不这么认为！」'
+    const putRes = await app.inject({
+      method: 'PUT',
+      url: `/api/characters/${created.id}`,
+      payload: { name: '林月如', voiceProfile: voiceText },
+    })
+    expect(putRes.statusCode).toBe(200)
+    expect(putRes.json().voiceProfile).toBe(voiceText)
+
+    const listRes = await app.inject({ method: 'GET', url: `/api/projects/${p.id}/characters` })
+    expect(listRes.statusCode).toBe(200)
+    const found = listRes.json().find((c: { name: string }) => c.name === '林月如')
+    expect(found.voiceProfile).toBe(voiceText)
+    await app.close()
+  })
 })

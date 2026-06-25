@@ -7,6 +7,7 @@ import { runMigrations } from '../db/index.js'
 import { writeManuscript } from './io.js'
 import { syncDiskHashes } from './diffScanner.js'
 import { manuscriptPath } from '../projects/paths.js'
+import { _clearSelfWrites } from './selfWriteRegistry.js'
 
 describe('syncDiskHashes', () => {
   let home: string
@@ -18,6 +19,7 @@ describe('syncDiskHashes', () => {
     novelsDir = path.join(home, 'Novels')
     await fs.mkdir(novelsDir, { recursive: true })
     dbPath = path.join(home, 'index.db')
+    _clearSelfWrites()
   })
   afterEach(async () => {
     await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
@@ -73,5 +75,48 @@ describe('syncDiskHashes', () => {
     const result = await syncDiskHashes(db, novelsDir)
     expect(result.scanned).toBeGreaterThanOrEqual(0)
     expect(result.updated).toBe(0)
+  })
+
+  it('skips a hash mismatch that is the server\'s own recent write (the selfWriteRegistry guard)', async () => {
+    // Simulates the user-saving-then-diffScanner-running race: the server
+    // wrote the file, but `scenes.content_hash` is stale (e.g. a concurrent
+    // transaction rewrote it to an older value). The scanner must NOT clobber
+    // the disk value into the DB, otherwise the next PUT will see a stale
+    // baseHash and 422.
+    const { db, scene } = await makeProjectWithScene()
+    const file = manuscriptPath(path.join(novelsDir, 'p'), 'vol-1', 'ch-1', 'sc-1')
+    const hashFromWrite = await writeManuscript(file, 'user content v1')
+    expect(hashFromWrite.length).toBe(64)
+
+    // Simulate a concurrent writer that left `scenes.content_hash` at an
+    // older value than the disk — this is exactly the in-DB state that
+    // would have caused the original spurious 422.
+    db.prepare('UPDATE scenes SET content_hash = ? WHERE id = ?').run('stale-hash', scene.id)
+
+    const result = await syncDiskHashes(db, novelsDir)
+    expect(result.scanned).toBeGreaterThanOrEqual(1)
+    // The guard fires → no DB update, even though disk hash differs from DB hash.
+    expect(result.updated).toBe(0)
+
+    const row = db.prepare('SELECT content_hash FROM scenes WHERE id = ?').get(scene.id) as { content_hash: string }
+    expect(row.content_hash).toBe('stale-hash')
+  })
+
+  it('still updates scenes.content_hash for genuine external edits after the selfWrite window expires', async () => {
+    // Same setup as above, but with the registry cleared (simulating > 5s
+    // having passed since the server\'s write). The scanner must now treat
+    // the disk-vs-DB mismatch as a real external edit and adopt disk.
+    const { db, scene } = await makeProjectWithScene()
+    const file = manuscriptPath(path.join(novelsDir, 'p'), 'vol-1', 'ch-1', 'sc-1')
+    await writeManuscript(file, 'original')
+    db.prepare('UPDATE scenes SET content_hash = ? WHERE id = ?').run('stale-hash', scene.id)
+
+    _clearSelfWrites()
+    const result = await syncDiskHashes(db, novelsDir)
+    expect(result.updated).toBeGreaterThanOrEqual(1)
+
+    const row = db.prepare('SELECT content_hash FROM scenes WHERE id = ?').get(scene.id) as { content_hash: string }
+    expect(row.content_hash).not.toBe('stale-hash')
+    expect(row.content_hash.length).toBe(64)
   })
 })

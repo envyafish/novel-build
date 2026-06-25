@@ -14,6 +14,7 @@ const characterBody = z.object({
   personality: z.string().default(''),
   background: z.string().default(''),
   relationships: z.string().default(''),
+  voiceProfile: z.string().default(''),
   notes: z.string().default(''),
 })
 
@@ -65,7 +66,8 @@ function toCharacterDto(row: any) {
     id: row.id, projectId: row.project_id, name: row.name,
     aliases: JSON.parse(row.aliases), appearance: row.appearance,
     personality: row.personality, background: row.background,
-    relationships: row.relationships, notes: row.notes,
+    relationships: row.relationships, voiceProfile: row.voice_profile,
+    notes: row.notes,
     createdAt: row.created_at, updatedAt: row.updated_at,
   }
 }
@@ -134,8 +136,8 @@ export function registerWorldRoutes(app: any, db: Database) {
     const body = characterBody.parse(req.body)
     const t = now()
     const info = db.prepare(
-      'INSERT INTO characters (project_id, name, aliases, appearance, personality, background, relationships, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)'
-    ).run(Number(req.params.projectId), body.name, JSON.stringify(body.aliases), body.appearance, body.personality, body.background, body.relationships, body.notes, t, t)
+      'INSERT INTO characters (project_id, name, aliases, appearance, personality, background, relationships, voice_profile, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+    ).run(Number(req.params.projectId), body.name, JSON.stringify(body.aliases), body.appearance, body.personality, body.background, body.relationships, body.voiceProfile, body.notes, t, t)
     const row = db.prepare('SELECT * FROM characters WHERE id = ?').get(info.lastInsertRowid)
     return toCharacterDto(row)
   })
@@ -144,8 +146,8 @@ export function registerWorldRoutes(app: any, db: Database) {
     const body = characterBody.parse(req.body)
     const t = now()
     db.prepare(
-      'UPDATE characters SET name=?, aliases=?, appearance=?, personality=?, background=?, relationships=?, notes=?, updated_at=? WHERE id=?'
-    ).run(body.name, JSON.stringify(body.aliases), body.appearance, body.personality, body.background, body.relationships, body.notes, t, Number(req.params.id))
+      'UPDATE characters SET name=?, aliases=?, appearance=?, personality=?, background=?, relationships=?, voice_profile=?, notes=?, updated_at=? WHERE id=?'
+    ).run(body.name, JSON.stringify(body.aliases), body.appearance, body.personality, body.background, body.relationships, body.voiceProfile, body.notes, t, Number(req.params.id))
     const row = db.prepare('SELECT * FROM characters WHERE id = ?').get(Number(req.params.id))
     if (!row) throw apiError(404, 'not_found', 'character not found')
     return toCharacterDto(row)

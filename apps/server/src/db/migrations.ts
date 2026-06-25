@@ -185,4 +185,8 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       CREATE INDEX idx_daily_word_log_project_date ON daily_word_log(project_id, date);
     `,
   },
+  {
+    id: 8,
+    sql: `ALTER TABLE characters ADD COLUMN voice_profile TEXT NOT NULL DEFAULT '';`,
+  },
 ]

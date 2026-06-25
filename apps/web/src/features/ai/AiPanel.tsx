@@ -25,7 +25,15 @@ interface SheetProps {
   inputText: string
   selection?: string | null | undefined
   onAccept: (text: string, mode: CompletionMode, scope: AiScope, scenes?: ParsedScene[]) => void
-  /** Existing draft to recover from when the panel first opens (page refresh, etc). */
+  /** Existing draft to recover from when the panel first opens (page refresh, etc).
+   *
+   * NOTE: This prop is intentionally consumed only at `useAiStream` *initialization*
+   * time. Recovery of interrupted drafts (page refresh, navigation, network drop)
+   * is handled by the recovery banner in EditorPage, NOT here. The panel itself
+   * always opens in an "idle" state ready for a new generation. Keep this prop
+   * for API compatibility but do not add logic that reads it inside this body —
+   * it would be misleading to users that the recovery banner is the canonical UI
+   * for resuming an interrupted run. */
   recoverFromDraft?: import('./draftsApi.js').DraftDto | undefined
   /** Shared AI stream state managed by parent — keeps running when panel closes. */
   aiState: AiStreamState
@@ -168,6 +176,7 @@ export function AiPanelSheet({ open, onOpenChange, projectId, sceneId, model, in
             personality: str(c.personality) || existing.personality,
             background: str(c.background) || existing.background,
             relationships: str(c.relationships) || existing.relationships,
+            voiceProfile: str(c.voiceProfile) || existing.voiceProfile,
             notes: mergedNotes,
           })
         } else {
@@ -178,6 +187,7 @@ export function AiPanelSheet({ open, onOpenChange, projectId, sceneId, model, in
             personality: str(c.personality),
             background: str(c.background),
             relationships: str(c.relationships),
+            voiceProfile: str(c.voiceProfile),
             notes: str(c.notes),
           })
         }

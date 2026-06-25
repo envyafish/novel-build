@@ -80,7 +80,7 @@ ${input}`,
 {
   "report": "一致性分析报告，用中文写，包含：\\n✅ 通过项\\n⚠️ 需注意\\n❌ 不一致",
   "characters": [
-    { "name": "姓名", "aliases": [], "appearance": "外貌", "personality": "性格", "background": "背景", "relationships": "关系" }
+    { "name": "姓名", "aliases": [], "appearance": "外貌", "personality": "性格", "background": "背景", "relationships": "关系", "voiceProfile": "语音档案：说话风格 / 用词特征 / 语气特点 / 口头禅 / 句式习惯 / 情感表达方式" }
   ],
   "worldElements": [
     { "name": "名称", "category": "location/organization/item/concept/rule", "description": "描述" }
@@ -119,7 +119,8 @@ ${input}`,
   "appearance": "外貌描写",
   "personality": "性格特点",
   "background": "人物背景",
-  "relationships": "与其他人物的关系"
+  "relationships": "与其他人物的关系",
+  "voiceProfile": "语音档案：说话风格 / 用词特征 / 语气特点 / 口头禅 / 句式习惯 / 情感表达方式"
 }
 
 [故事背景]
