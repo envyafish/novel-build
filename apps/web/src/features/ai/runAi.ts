@@ -8,6 +8,10 @@ import { consumeNdjson } from '../../api/stream.js'
  * `projectId` is the preferred project-resolution key (server uses it directly,
  * no scene JOIN needed). `sceneId` is optional — only needed for modes that
  * pull scene-specific context (previous scene tail, scene notes, outline).
+ *
+ * Pass `signal` to allow the caller to abort the request (e.g. when the user
+ * closes the review/extract panel while a request is in flight). The function
+ * throws an `AbortError` if aborted.
  */
 export async function runAiCompletion(opts: {
   sceneId?: number
@@ -32,6 +36,7 @@ export async function runAiCompletion(opts: {
       ...(opts.signal ? { signal: opts.signal } : {}),
     })
   } catch (e) {
+    if ((e as Error).name === 'AbortError') throw e
     // fetch() itself threw — most likely the dev server (Vite on 5173) is down.
     throw new Error(`无法连接到本地开发服务器(5173),请确认 \`pnpm dev\` 已启动`)
   }

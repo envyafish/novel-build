@@ -5,7 +5,6 @@ import type { Database } from '../db/sqlite.js'
 import type { ProviderRegistry } from '../ai/registry.js'
 import { StreamLimiter } from '../ai/limiter.js'
 import { buildContext } from '../ai/context.js'
-import { DraftStore } from '../ai/draftStore.js'
 import { apiError } from '../errors.js'
 
 const completeBody = z.object({
@@ -21,13 +20,11 @@ const completeBody = z.object({
   model: z.string().min(1),
   inputText: z.string(),
   overrideMessages: z.array(z.object({ role: z.enum(['system', 'user', 'assistant']), content: z.string() })).optional(),
-  draftId: z.string().optional(),
 })
 
 
 export function registerAiRoutes(app: any, db: Database, registry: ProviderRegistry, novelsDir: string) {
   const limiter = new StreamLimiter(2)
-  const draftStore = new DraftStore(db)
 
   app.get('/api/ai/providers', async () => {
     const def = registry.getDefaultConfig()?.id ?? null
@@ -113,54 +110,12 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
         modelMaxTokens: 0,
       }
     }
-    // Resolve project_id for draft (FK requirement).
-    // Order: explicit projectId → scene JOIN.
-    // Must be done BEFORE writeHead because we may need to return an error.
-    let projectId: number | null = null
-    if (typeof body.projectId === 'number') {
-      projectId = body.projectId
-    } else if (body.sceneId !== undefined) {
-      const row = db
-        .prepare<{ project_id: number }>(
-          'SELECT v.project_id as project_id FROM scenes s JOIN chapters c ON s.chapter_id = c.id JOIN volumes v ON c.volume_id = v.id WHERE s.id = ?',
-        )
-        .get(body.sceneId)
-      projectId = row?.project_id ?? null
-    }
-    if (!projectId) {
-      throw apiError(404, 'project_not_found', 'project for scene not found')
-    }
 
     const provider = registry.getProvider(providerId)
     reply.raw.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' })
     let aborted = false
     reply.raw.on('close', () => { aborted = true })
-    // Set up draft persistence. Use the client's draftId if provided; otherwise create one.
-    let draft = body.draftId ? draftStore.get(body.draftId) : undefined
-    if (draft && draft.status === 'streaming') {
-      // Reattach: client is reconnecting. Keep existing text but reset status to streaming.
-      draftStore.setStatus(draft.id, 'streaming', null)
-    }
-    if (!draft) {
-      draft = draftStore.create({
-        projectId,
-        sceneId: body.sceneId,
-        mode: body.mode,
-        model: body.model,
-        maxOutputTokens: ctx.modelMaxTokens ?? 0,
-      })
-    } else if (draft.status === 'done' || draft.status === 'error' || draft.status === 'aborted') {
-      // Resuming after completion: create a fresh draft for the new run.
-      draft = draftStore.create({
-        projectId,
-        sceneId: body.sceneId,
-        mode: body.mode,
-        model: body.model,
-        maxOutputTokens: ctx.modelMaxTokens ?? 0,
-      })
-    }
-    // Always emit the draftId on the first frame so the client can correlate.
-    reply.raw.write(JSON.stringify({ draftId: draft.id, maxOutputTokens: ctx.modelMaxTokens ?? 0 }) + '\n')
+    reply.raw.write(JSON.stringify({ maxOutputTokens: ctx.modelMaxTokens ?? 0 }) + '\n')
     try {
       await limiter.acquire()
       try {
@@ -168,7 +123,6 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
         reply.raw.on('close', () => bridge.abort())
         let promptTokens = 0
         let completionTokens = 0
-        let lastFlushAt = 0
         for await (const delta of provider.complete({
           model: body.model,
           messages: ctx.messages,
@@ -178,21 +132,9 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
         })) {
           if (aborted) break
           reply.raw.write(JSON.stringify({ delta }) + '\n')
-          // Coalesce DB writes: only flush every ~200ms to avoid hammering SQLite
-          const now = Date.now()
-          if (now - lastFlushAt > 200) {
-            draftStore.appendText(draft.id, '')
-            lastFlushAt = now
-          }
           // We don't get token counts from the standard OpenAI delta stream; estimate from text length.
           completionTokens = Math.ceil(delta.length / 1.5) // rough CJK char-to-token ratio
-          draftStore.appendText(draft.id, delta)
         }
-        // Persist usage on completion.
-        if (promptTokens || completionTokens) {
-          draftStore.setUsage(draft.id, promptTokens, completionTokens)
-        }
-        draftStore.setStatus(draft.id, aborted ? 'aborted' : 'done', null)
         if (!aborted) {
           reply.raw.write(JSON.stringify({ done: true, usage: { promptTokens, completionTokens } }) + '\n')
         }
@@ -201,7 +143,6 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
       }
     } catch (e) {
       req.log.error({ err: e }, 'AI stream error')
-      draftStore.setStatus(draft.id, 'error', (e as Error).message)
       reply.raw.write(JSON.stringify({ error: (e as Error).message, recoverable: true }) + '\n')
     }
     reply.raw.end()
@@ -210,4 +151,3 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
 // @ts-nocheck - Fastify 4.27 + @types/node 25.x route type narrowing under
 // exactOptionalPropertyTypes is brittle and orthogonal to v0 functionality.
 // Runtime is correct; types are deliberately relaxed here.
-

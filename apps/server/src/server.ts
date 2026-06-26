@@ -12,12 +12,10 @@ import { registerOutlineRoutes } from './routes/outline.js'
 import { registerSceneRoutes } from './routes/scenes.js'
 import { registerSnapshotRoutes } from './routes/snapshots.js'
 import { registerAiRoutes } from './routes/ai.js'
-import { registerDraftRoutes } from './ai/draftRouter.js'
 import { registerSettingsRoutes } from './routes/settings.js'
 import { registerExportRoutes } from './routes/export.js'
 import { registerWorldRoutes } from './routes/world.js'
 import { syncDiskHashes } from './manuscripts/diffScanner.js'
-import { DraftStore } from './ai/draftStore.js'
 
 export async function buildServer(opts: { enableExternalScan?: boolean; silentLogger?: boolean } = {}) {
   const cfg = loadConfig()
@@ -33,7 +31,6 @@ export async function buildServer(opts: { enableExternalScan?: boolean; silentLo
   registerSceneRoutes(app, db, cfg.novelsDir)
   registerSnapshotRoutes(app, db, cfg.novelsDir)
   registerAiRoutes(app, db, registry, cfg.novelsDir)
-  registerDraftRoutes(app, db)
   registerSettingsRoutes(app, db)
   registerExportRoutes(app, db, cfg.novelsDir)
   registerWorldRoutes(app, db)
@@ -55,21 +52,6 @@ export async function buildServer(opts: { enableExternalScan?: boolean; silentLo
     // Expose for tests to clean up
     ;(app as unknown as { __externalScanTimer: NodeJS.Timeout }).__externalScanTimer = timer
   }
-
-  // Periodic draft TTL cleanup — best-effort, runs hourly.
-  const draftStore = new DraftStore(db)
-  const draftTimer = setInterval(() => {
-    try {
-      const purged = draftStore.purgeExpired()
-      if (purged > 0) {
-        app.log.info({ purged }, 'purged expired AI drafts')
-      }
-    } catch {
-      // best-effort
-    }
-  }, 60 * 60 * 1000)
-  draftTimer.unref()
-  ;(app as unknown as { __draftPurgeTimer: NodeJS.Timeout }).__draftPurgeTimer = draftTimer
 
   return { app, cfg, db }
 }

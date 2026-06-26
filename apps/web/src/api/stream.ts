@@ -1,5 +1,5 @@
 export type StreamEvent =
-  | { kind: 'meta'; draftId: string; maxOutputTokens: number }
+  | { kind: 'meta'; maxOutputTokens: number }
   | { kind: 'delta'; delta: string }
   | { kind: 'done'; usage?: { promptTokens?: number; completionTokens?: number } }
   | { kind: 'error'; message: string; recoverable: boolean }
@@ -22,8 +22,8 @@ export async function* consumeNdjson(res: Response, signal?: AbortSignal): Async
         if (!line.trim()) continue
         try {
           const obj = JSON.parse(line) as Record<string, unknown>
-          if (typeof obj.draftId === 'string' && typeof obj.maxOutputTokens === 'number') {
-            yield { kind: 'meta', draftId: obj.draftId, maxOutputTokens: obj.maxOutputTokens }
+          if (typeof obj.maxOutputTokens === 'number') {
+            yield { kind: 'meta', maxOutputTokens: obj.maxOutputTokens }
           } else if (typeof obj.delta === 'string') {
             yield { kind: 'delta', delta: obj.delta }
           } else if (obj.done === true) {
