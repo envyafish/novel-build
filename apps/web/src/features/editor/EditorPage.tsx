@@ -64,30 +64,6 @@ export function EditorPage() {
   const [applyProgress, setApplyProgress] = useState<{ current: number; total: number; sceneTitle: string } | null>(null)
   const [applyLoading, setApplyLoading] = useState(false)
 
-  // Restore review state from localStorage on mount (persists across refresh)
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(`review-${projectId}-${reviewChapterId}`)
-      if (saved) {
-        const data = JSON.parse(saved)
-        if (data.reviewText) setReviewText(data.reviewText)
-        if (data.reviewKind) setReviewKind(data.reviewKind)
-        if (data.reviewText) setReviewOpen(true)
-      }
-    } catch { /* ignore */ }
-  }, [projectId, reviewChapterId])
-
-  // Persist review state to localStorage when it changes
-  useEffect(() => {
-    if (reviewText && reviewChapterId) {
-      try {
-        localStorage.setItem(`review-${projectId}-${reviewChapterId}`, JSON.stringify({
-          reviewText,
-          reviewKind,
-        }))
-      } catch { /* ignore */ }
-    }
-  }, [reviewText, reviewKind, projectId, reviewChapterId])
   const [saveState, setSaveState] = useState<SaveState>('idle')
   const [lastSavedAt, setLastSavedAt] = useState<number | undefined>(undefined)
   const [saveError, setSaveError] = useState<string | undefined>(undefined)
