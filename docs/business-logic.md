@@ -161,7 +161,7 @@
 ### 4.2 已修复
 
 🟢 **「恢复」只打开空 AI Panel**
-之前 `recoverFromDraft` 链路死了，恢复按钮调 `handleOpenAi()` 只是打开空 panel，**已生成内容完全不可见**。现在恢复横幅扩展为完整面板：显示文本预览 + 「丢弃」「重新生成」「接受（X 字）」三按钮；接受走 `applyAcceptedText`（与 AI panel 接受共用路径）。**已修复**。
+之前 `recoverFromDraft` 链路死了，恢复按钮调 `handleOpenAi()` 只是打开空 panel，**已生成内容完全不可见**。现在恢复横幅扩展为完整面板：显示文本预览 + 「丢弃」「接受（X 字）」双按钮；接受走 `applyAcceptedText`（与 AI sidebar 接受共用路径）。AI 编辑功能已迁移为常驻 `AiSidebar`（2026-06-26），所以「重新生成」按钮被移除 — 用户直接在 sidebar 重新触发即可。**已修复**。
 
 ### 4.3 真实漏洞
 

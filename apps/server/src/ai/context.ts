@@ -10,6 +10,10 @@ export interface ContextInput {
   /** Required for scene-specific context (previous scene tail, scene notes, outline tree).
    *  Optional for project-level operations like chapter review/extract. */
   sceneId?: number
+  /** When set (and `sceneId` is absent), reads the tail of the chapter's
+   *  last-written scene so AI can continue from there. Used by chapter-level
+   *  generation flows like `generate_chapter` that don't pin to a single scene. */
+  chapterId?: number
   /** Required for ai_settings lookup. If omitted, falls back to scene JOIN when sceneId is provided. */
   projectId?: number
   novelsDir: string
@@ -82,6 +86,42 @@ function buildWorldSummary(db: Database, projectId: number): string {
     }
   }
   return summary
+}
+
+/**
+ * Reads the tail of the chapter's last-written scene so AI can continue from
+ * there. Returns an empty string if the chapter has no scenes with a written
+ * manuscript (e.g. the chapter is brand-new) or if the file is unreadable —
+ * callers should treat empty tail as "no prior context".
+ *
+ * `length(s.content_hash) = 64` filters out scenes that are still DB-only
+ * (their manuscript file may not exist yet — see saveScene flow).
+ */
+async function readChapterTail(
+  db: Database,
+  projectSlug: string,
+  chapterId: number,
+  novelsDir: string,
+  tailChars: number,
+): Promise<string> {
+  const last = db
+    .prepare<{ slug: string; chap_slug: string; vol_slug: string }>(
+      `SELECT s.slug, c.slug as chap_slug, v.slug as vol_slug
+       FROM scenes s JOIN chapters c ON s.chapter_id = c.id
+       JOIN volumes v ON c.volume_id = v.id
+       WHERE s.chapter_id = ?
+         AND length(s.content_hash) = 64
+       ORDER BY s.order_index DESC LIMIT 1`,
+    )
+    .get(chapterId)
+  if (!last) return ''
+  const file = manuscriptPath(path.join(novelsDir, projectSlug), last.vol_slug, last.chap_slug, last.slug)
+  try {
+    const r = await readManuscript(file)
+    return r.text.slice(-tailChars)
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -180,6 +220,35 @@ export async function buildContext(input: ContextInput): Promise<{ messages: Cha
       prevTail = r.text.slice(-input.contextPrevChars)
     }
     ctxText = `Volume: ${row.vol_slug}\nChapter: ${row.chap_title}\nScene notes: ${row.notes ?? ''}\n\n[Previous scene tail]\n${prevTail}`
+  }
+
+  // Chapter-level context: when only chapterId is provided (no sceneId),
+  // pull the tail of the chapter's last-written scene plus the existing
+  // scene titles in this chapter so the AI can continue from there without
+  // duplicating earlier content or scene names.
+  if (!row && input.chapterId !== undefined) {
+    const proj = input.db
+      .prepare<{ project_slug: string }>(
+        `SELECT p.slug as project_slug
+         FROM chapters c JOIN volumes v ON c.volume_id = v.id
+         JOIN projects p ON v.project_id = p.id WHERE c.id = ?`,
+      )
+      .get(input.chapterId)
+    if (proj) {
+      const chapterTail = await readChapterTail(
+        input.db, proj.project_slug, input.chapterId,
+        input.novelsDir, input.contextPrevChars,
+      )
+      const sceneTitles = input.db
+        .prepare<{ title: string }>(
+          'SELECT title FROM scenes WHERE chapter_id = ? ORDER BY order_index',
+        )
+        .all(input.chapterId)
+      const titlesLine = sceneTitles.length > 0
+        ? sceneTitles.map((s) => `- ${s.title}`).join('\n')
+        : '(本章节暂无场景)'
+      ctxText = `[Current chapter]\nPrevious scenes in this chapter:\n${titlesLine}\n\n[Previous chapter tail]\n${chapterTail}`
+    }
   }
 
   // Build world summary for AI context

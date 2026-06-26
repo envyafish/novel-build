@@ -10,6 +10,10 @@ import { apiError } from '../errors.js'
 
 const completeBody = z.object({
   sceneId: z.number().int().optional(),
+  // Optional chapter-scoped context (e.g. for `generate_chapter` invoked
+  // before any scene exists in the chapter — reads the chapter's last
+  // scene tail + existing titles instead of pinning to a specific scene).
+  chapterId: z.number().int().optional(),
   // Prefer `projectId` over scene-derived lookup. Frontend always passes it
   // (it's in the URL). Server still falls back to scene JOIN for legacy callers.
   projectId: z.number().int().optional(),
@@ -90,6 +94,7 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
       ctx = await buildContext({
         db,
         ...(body.sceneId !== undefined ? { sceneId: body.sceneId } : {}),
+        ...(body.chapterId !== undefined ? { chapterId: body.chapterId } : {}),
         ...(body.projectId !== undefined ? { projectId: body.projectId } : {}),
         novelsDir,
         mode: body.mode,

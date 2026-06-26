@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Sparkles, FilePlus, BookPlus, Settings as SettingsIcon, Focus as FocusIcon, Camera, BookOpen, Globe, FileText, Wand2, Check, Save, ChevronDown, RotateCcw, Trash2, Pencil } from 'lucide-react'
+import { Sparkles, FilePlus, BookPlus, Settings as SettingsIcon, Focus as FocusIcon, Camera, BookOpen, Check, ChevronDown, RotateCcw, Trash2, Pencil } from 'lucide-react'
 import { api, ApiClientError } from '../../api/client.js'
 import type { SceneDetailDto, AiSettingsDto, EntityStatus, ProjectDto, WorldCategory, ConflictType, ForeshadowStatus, CompletionMode } from '@novel/shared'
 import { SceneEditor } from './SceneEditor.js'
@@ -9,14 +9,16 @@ import { SnapshotHistory } from './SnapshotHistory.js'
 import { OutlineTree } from '../outline/OutlineTree.js'
 import { outlineApi } from '../outline/api.js'
 import { buildTree } from '../outline/tree-utils.js'
-import { AiPanelSheet } from '../ai/AiPanel.js'
+import { AiSidebar } from '../ai/AiPanel.js'
+import { GenerateScenesDialog } from '../ai/GenerateScenesDialog.js'
 import { WorldPanel } from '../world/WorldPanel.js'
 import { worldApi } from '../world/api.js'
 import { formatAiOutput } from '../ai/format.js'
-import { titleToSlug, splitChapterToScenes, type ParsedScene } from '../ai/sceneSplitter.js'
+import { type ParsedScene } from '../ai/sceneSplitter.js'
 import { parseAiJson } from '../ai/jsonParse.js'
 import { runAiCompletion } from '../ai/runAi.js'
 import { draftsApi, type DraftDto } from '../ai/draftsApi.js'
+import { applyGeneratedScenes } from '../ai/sceneBatchCreate.js'
 import { useAiStream } from '../../hooks/useAiStream.js'
 import { StoryArcGenerator } from './StoryArcGenerator.js'
 import { useDebouncedSave } from '../../hooks/useDebouncedSave.js'
@@ -39,7 +41,6 @@ export function EditorPage() {
   const [sceneId, setSceneId] = useState<number | undefined>()
   const [content, setContent] = useState('')
   const [baseHash, setBaseHash] = useState('')
-  const [aiOpen, setAiOpen] = useState(false)
   const [storyArcOpen, setStoryArcOpen] = useState(false)
   const [editingStoryArc, setEditingStoryArc] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
@@ -122,35 +123,21 @@ export function EditorPage() {
     }
   }, [scene.data?.id])
 
-  // When the user opens the AI panel, look for an in-flight draft for the
-  // current scene so we can offer to resume from where they left off.
-  const handleOpenAi = useCallback(async () => {
-    // Always open immediately — don't block on the draft lookup.
-    setAiOpen(true)
-    if (sceneId !== undefined) {
-      try {
-        const drafts = await draftsApi.listByScene(sceneId)
-        const inflight = drafts.find((d: DraftDto) => d.status === 'streaming')
-        setRecoverDraft(inflight)
-      } catch {
-        setRecoverDraft(undefined)
-      }
-    } else {
-      setRecoverDraft(undefined)
-    }
-  }, [sceneId])
-
+    // Ref used by the keyboard handler below — keeping this up to date outside
+  // the effect means the handler closure always reads fresh values without
+  // re-binding on every render.
   const focusModeRef = useRef(false)
   focusModeRef.current = focusMode
-  const sceneIdRef = useRef<number | undefined>(sceneId)
-  sceneIdRef.current = sceneId
+
+  // Reset the AI sidebar's stream when the user switches to a different scene —
+  // otherwise the panel would keep showing the previous scene's generated text
+  // and accept-button label, which is confusing.
+  useEffect(() => {
+    aiReset()
+  }, [scene.data?.id, aiReset])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        if (sceneIdRef.current !== undefined) void handleOpenAi()
-      }
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault()
         setFocusMode((v) => !v)
@@ -287,23 +274,27 @@ export function EditorPage() {
     },
   })
 
-  const addScene = useMutation({
-    mutationFn: async (chapterId: number) => {
-      const result = await prompt({
-        title: '新建场景',
-        fields: [{ name: 'title', label: '场景标题', placeholder: '开场', required: true }],
-        submitLabel: '创建',
-      })
-      if (!result) return null
-      const slug = 'sc-' + Date.now().toString(36)
-      return outlineApi.createScene(chapterId, slug, result.title ?? '')
-    },
-    onSuccess: (s) => {
-      if (!s) return
-      qc.invalidateQueries({ queryKey: ['outline', projectId] })
-      setSceneId(s.id)
-    },
-  })
+  // "Add scene" no longer uses the simple single-field prompt — it now opens
+  // the GenerateScenesDialog so the user can choose between a single manual
+  // scene and AI-assisted batch generation. The dialog drives all createScene
+  // calls itself; we just track which chapter to insert into + its title
+  // (shown in the dialog as the "AI will read the tail of…" hint).
+  const [addSceneOpen, setAddSceneOpen] = useState(false)
+  const [addSceneChapterId, setAddSceneChapterId] = useState<number | null>(null)
+  const [addSceneChapterTitle, setAddSceneChapterTitle] = useState('')
+
+  const handleAddScene = useCallback((chapterId: number) => {
+    // Look up the chapter title from the cached query so the dialog can show
+    // "AI will read the tail of «chapter-title»". Fall back to a generic
+    // label if the query hasn't loaded yet (chapter will be in outline by
+    // the time the dialog is actually rendered, but TS can't prove that
+    // across this closure).
+    const ch = outline.data?.chapters.find((c) => c.id === chapterId)
+    setAddSceneChapterId(chapterId)
+    setAddSceneChapterTitle(ch?.title ?? '当前章节')
+    setAddSceneOpen(true)
+  }, [outline.data])
+
   const deleteScene = useMutation({
     mutationFn: (id: number) => outlineApi.deleteScene(id),
     onSuccess: (_result, id) => {
@@ -604,19 +595,27 @@ export function EditorPage() {
         try {
           const cs = outlineData?.scenes.find((s) => s.id === sceneId)
           if (!cs) throw new Error('未找到当前章节')
-          for (let i = 0; i < scenes.length; i++) {
-            const s = scenes[i]!
-            const slug = titleToSlug(s.title, i)
-            const created = await outlineApi.createScene(cs.chapterId, slug, s.title)
-            if (s.markdown.trim()) {
-              await api(`/api/scenes/${created.id}`, {
-                method: 'PUT',
-                body: JSON.stringify({ markdown: s.markdown, baseHash: created.contentHash }),
-              })
-            }
+          // Use the shared helper so the recovery-banner path benefits from
+          // the same "single failure doesn't drop the whole batch" semantics
+          // as the GenerateScenesDialog flow.
+          const { createdIds, failedTitles } = await applyGeneratedScenes({
+            projectId,
+            chapterId: cs.chapterId,
+            scenes,
+            qc,
+          })
+          if (createdIds.length > 0) {
+            setSceneId(createdIds[0]!)
           }
-          qc.invalidateQueries({ queryKey: ['outline', projectId] })
-          toast({ kind: 'success', title: `已创建 ${scenes.length} 个场景` })
+          if (failedTitles.length === 0) {
+            toast({ kind: 'success', title: `已创建 ${createdIds.length} 个场景` })
+          } else {
+            toast({
+              kind: createdIds.length === 0 ? 'error' : 'warning',
+              title: `已创建 ${createdIds.length} 个场景，${failedTitles.length} 个失败`,
+              description: failedTitles.join('、'),
+            })
+          }
         } catch (e) {
           toast({ kind: 'error', title: '创建场景失败', description: (e as Error).message })
         }
@@ -992,7 +991,7 @@ ${sceneText}`
                   onSelectChapter={setSelectedChapterId}
                   onAddVolume={() => addVolume.mutate()}
                   onAddChapter={(volumeId) => addChapter.mutate(volumeId)}
-                  onAddScene={(chapterId) => addScene.mutate(chapterId)}
+                  onAddScene={(chapterId) => handleAddScene(chapterId)}
                   onCycleStatus={(id) => cycleStatus.mutate(id)}
                   onDeleteScene={handleDeleteScene}
                   onDeleteChapter={handleDeleteChapter}
@@ -1071,34 +1070,37 @@ ${sceneText}`
                   退出专注 · Esc
                 </button>
               )}
-              <div className="relative flex-1 overflow-auto">
-                <SceneEditor
-                  initialMarkdown={content}
-                  onChangeMarkdown={setContent}
-                  onSelectionText={setSelectionText}
-                  onForceSave={saveNow}
-                  onEditorReady={handleEditorReady}
-                  focusMode={focusMode}
-                />
-              </div>
-
-              {/* Floating AI button (chapter-level review/extract moved to outline sidebar) */}
-              <div className="fixed bottom-6 right-6 z-50 flex flex-col items-center gap-2">
-                <Button
-                  onClick={() => void handleOpenAi()}
-                  className="relative h-11 w-11 rounded-full shadow-lg"
-                  size="icon"
-                >
-                  <Sparkles className="h-4 w-4" />
-                  {/* Pulsing indicator when AI is streaming in background */}
-                  {aiState.status === 'streaming' && (
-                    <span className="absolute -right-0.5 -top-0.5 flex h-3 w-3">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
-                      <span className="relative inline-flex h-3 w-3 rounded-full bg-green-500" />
-                    </span>
-                  )}
-                  <span className="sr-only">AI 助手</span>
-                </Button>
+              <div className="flex flex-1 overflow-hidden">
+                <div className="relative flex-1 overflow-auto">
+                  <SceneEditor
+                    initialMarkdown={content}
+                    onChangeMarkdown={setContent}
+                    onSelectionText={setSelectionText}
+                    onForceSave={saveNow}
+                    onEditorReady={handleEditorReady}
+                    focusMode={focusMode}
+                  />
+                </div>
+                {/* AI sidebar — hidden in focus mode so the editor takes the full width. */}
+                {!focusMode && (
+                  <AiSidebar
+                    sceneId={sceneId}
+                    model={settings.data?.model ?? 'gpt-4o-mini'}
+                    content={content}
+                    selection={selectionText}
+                    aiState={aiState}
+                    aiStart={aiStart}
+                    aiCancel={aiCancel}
+                    aiReset={aiReset}
+                    aiAccept={aiAccept}
+                    onAccept={async (rawText, mode) => {
+                      await applyAcceptedText(rawText, mode)
+                      if (mode !== 'plan_story_arc' && mode !== 'analyze_voice' && mode !== 'generate_chapter') {
+                        toast({ kind: 'success', title: '已应用到编辑器' })
+                      }
+                    }}
+                  />
+                )}
               </div>
 
               {/* Review panel moved out of {sceneId &&} below — see sibling block */}
@@ -1107,7 +1109,7 @@ ${sceneText}`
             <EmptyState
               onAddScene={
                 outlineData && outlineData.chapters.length > 0
-                  ? () => addScene.mutate(outlineData.chapters[0]!.id)
+                  ? () => handleAddScene(outlineData.chapters[0]!.id)
                   : undefined
               }
               onAddChapter={
@@ -1225,11 +1227,10 @@ ${sceneText}`
           {sceneId && (
             <>
               {/* Show recovery panel if there's an in-flight draft for this scene.
-              Lets the user read the already-generated text, accept it
-              (applies via the same code path as the AI panel's accept
-              button), discard it, or — only on explicit choice — open the
-              AI panel to start a brand-new generation. */}
-              {recoverDraft && !aiOpen && (
+              Lets the user read the already-generated text, accept it (applies
+              via the same code path as the AI sidebar's accept button), or
+              discard it. The AI sidebar is always visible alongside. */}
+              {recoverDraft && (
                 <div className="fixed bottom-24 right-6 z-40 flex w-[28rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border bg-background shadow-2xl">
                   <div className="flex items-center gap-2 border-b px-3 py-2 text-xs">
                     <div className="h-2 w-2 animate-pulse rounded-full bg-primary" />
@@ -1281,15 +1282,6 @@ ${sceneText}`
                     </Button>
                     <Button
                       size="sm"
-                      variant="outline"
-                      className="text-xs"
-                      onClick={() => void handleOpenAi()}
-                      title="打开 AI 面板开始新一轮生成（不会恢复已生成文本）"
-                    >
-                      <Wand2 className="mr-1 h-3 w-3" /> 重新生成
-                    </Button>
-                    <Button
-                      size="sm"
                       className="flex-1 text-xs"
                       disabled={!recoverDraft.text}
                       onClick={async () => {
@@ -1297,7 +1289,6 @@ ${sceneText}`
                         await applyAcceptedText(recoverDraft.text, mode)
                         await draftsApi.remove(recoverDraft.id).catch(() => {})
                         setRecoverDraft(undefined)
-                        setAiOpen(false)
                         if (mode !== 'plan_story_arc' && mode !== 'analyze_voice' && mode !== 'generate_chapter') {
                           toast({ kind: 'success', title: '已接受已生成内容' })
                         }
@@ -1308,36 +1299,6 @@ ${sceneText}`
                   </div>
                 </div>
               )}
-
-              <AiPanelSheet
-                open={aiOpen}
-                onOpenChange={(v) => {
-                  if (!v) setRecoverDraft(undefined)
-                  setAiOpen(v)
-                }}
-                projectId={projectId}
-                sceneId={sceneId}
-                model={settings.data?.model ?? 'gpt-4o-mini'}
-                inputText={content}
-                selection={selectionText}
-                recoverFromDraft={recoverDraft}
-                aiState={aiState}
-                aiStart={aiStart}
-                aiCancel={aiCancel}
-                aiReset={aiReset}
-                aiAccept={aiAccept}
-              onAccept={async (rawText, mode, scope, scenes) => {
-                await applyAcceptedText(rawText, mode, scope, scenes)
-                setAiOpen(false)
-                // Generate-mode and generate-chapter-mode flows already
-                // show their own success toasts inside applyAcceptedText.
-                // For the default editor-application path, surface a toast
-                // so the user gets explicit feedback.
-                if (mode !== 'plan_story_arc' && mode !== 'analyze_voice' && mode !== 'generate_chapter') {
-                  toast({ kind: 'success', title: '已应用到编辑器' })
-                }
-              }}
-            />
             </>
           )}
         </main>
@@ -1349,6 +1310,32 @@ ${sceneText}`
           onOpenChange={setStoryArcOpen}
           projectId={projectId}
           model={settings.data?.model ?? 'gpt-4o-mini'}
+        />
+      )}
+
+      {addSceneOpen && addSceneChapterId !== null && (
+        <GenerateScenesDialog
+          open={addSceneOpen}
+          onOpenChange={setAddSceneOpen}
+          projectId={projectId}
+          chapterId={addSceneChapterId}
+          chapterTitle={addSceneChapterTitle}
+          model={settings.data?.model ?? 'gpt-4o-mini'}
+          qc={qc}
+          onApplied={({ firstId, createdIds, failedTitles }) => {
+            if (createdIds.length > 0) {
+              setSceneId(firstId)
+            }
+            if (failedTitles.length === 0) {
+              toast({ kind: 'success', title: `已创建 ${createdIds.length} 个场景` })
+            } else {
+              toast({
+                kind: createdIds.length === 0 ? 'error' : 'warning',
+                title: `已创建 ${createdIds.length} 个场景，${failedTitles.length} 个失败`,
+                description: failedTitles.join('、'),
+              })
+            }
+          }}
         />
       )}
     </div>
