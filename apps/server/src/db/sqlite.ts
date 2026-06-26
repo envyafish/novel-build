@@ -72,6 +72,28 @@ export class Database {
       }
     }
   }
+  /**
+   * Like `transaction()` but uses `BEGIN IMMEDIATE` so the write lock is
+   * acquired at the start of the transaction. This eliminates the read-then-
+   * write race that exists with deferred `BEGIN`: two concurrent callers
+   * can both read the same row before either writes, which leads to lost
+   * updates (e.g. double-counted `daily_word_log`).
+   *
+   * The callback must be synchronous (it cannot `await`); do async file I/O
+   * BEFORE calling this and pass the results in. Use this for the small set
+   * of DB statements that must commit atomically.
+   */
+  runInWriteTx<R>(fn: () => R): R {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = fn()
+      this.db.exec('COMMIT')
+      return result
+    } catch (e) {
+      try { this.db.exec('ROLLBACK') } catch { /* ignore rollback failure */ }
+      throw e
+    }
+  }
   close(): void {
     this.db.close()
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { extractJson, stripThinking } from './jsonExtract.js'
+import { extractJson, stripThinking } from '@novel/shared'
 
 describe('extractJson (server)', () => {
   it('parses pure JSON', () => {

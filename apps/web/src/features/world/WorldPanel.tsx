@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Edit3, Users, Settings, Clock, Eye, ChevronDown, ChevronRight, Save, X, Sparkles, Wand2, Swords } from 'lucide-react'
+import { Plus, Trash2, Edit3, Users, Settings, Clock, Eye, ChevronDown, ChevronRight, Save, X, Sparkles, Wand2, Swords, Loader2 } from 'lucide-react'
 import type { CharacterDto, WorldElementDto, TimelineEventDto, ForeshadowDto, ConflictDto, WorldCategory, ForeshadowStatus, ConflictType, ConflictPhase, CompletionMode } from '@novel/shared'
 import { worldApi } from './api.js'
 import { useAiStream } from '../../hooks/useAiStream.js'
-import { parseAiJson } from '../ai/jsonParse.js'
+import { parseAiJson } from '@novel/shared'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -112,22 +112,30 @@ function AiGenerateSection({
 }) {
   const { state, start, cancel, reset } = useAiStream()
   const [prompt, setPrompt] = useState('')
+  // Tracks the last AI output we successfully parsed and forwarded to the
+  // parent. Used to make the auto-parse effect idempotent: under React
+  // StrictMode the effect fires twice, and parent re-renders can also
+  // re-fire it. Without this guard, the same successful text would produce
+  // duplicate create-mutation requests.
+  const lastHandledRef = useRef<string | null>(null)
 
   const handleGenerate = () => {
     if (!prompt.trim()) return
     start({ sceneId: sceneId ?? 0, mode, model, inputText: prompt.trim() })
   }
 
-  // Auto-parse JSON when done
-  if (state.status === 'done' && state.text) {
+  // Auto-parse JSON when done. Runs in an effect (not during render) so we
+  // don't setState during render — which would trigger React 18 warnings
+  // and could double-fire when the parent re-renders for unrelated reasons.
+  useEffect(() => {
+    if (state.status !== 'done' || !state.text) return
+    if (lastHandledRef.current === state.text) return
     const parsed = parseAiJson<Record<string, unknown>>(state.text)
-    if (parsed !== null) {
-      onGenerated(JSON.stringify(parsed))
-      reset()
-    }
-    // If parseAiJson returns null, fall through and show the raw output so the
-    // user can see what came back and try again or copy it.
-  }
+    if (parsed === null) return // leave raw output visible for the user to inspect
+    lastHandledRef.current = state.text
+    onGenerated(JSON.stringify(parsed))
+    reset()
+  }, [state.status, state.text, onGenerated, reset])
 
   return (
     <div className="space-y-2 rounded-lg border border-dashed p-3">
@@ -185,7 +193,7 @@ function CharactersTab({ projectId, qc, model }: { projectId: number; qc: Return
     onSuccess: () => qc.invalidateQueries({ queryKey: ['characters', projectId] }),
   })
 
-  const handleAiGenerated = (json: string) => {
+  const handleAiGenerated = useCallback((json: string) => {
     try {
       const data = JSON.parse(json)
       create.mutate({
@@ -201,13 +209,13 @@ function CharactersTab({ projectId, qc, model }: { projectId: number; qc: Return
     } catch {
       // JSON parse failed, ignore
     }
-  }
+  }, [create])
 
   return (
     <ScrollArea className="h-full">
       <div className="space-y-2 p-3">
         {items.map((c) => (
-          <CharacterCard key={c.id} item={c} isEditing={editing === c.id} onEdit={() => setEditing(c.id)} onCancel={() => setEditing(null)} projectId={projectId} qc={qc} onDelete={() => del.mutate(c.id)} />
+          <CharacterCard key={c.id} item={c} isEditing={editing === c.id} onEdit={() => setEditing(c.id)} onCancel={() => setEditing(null)} projectId={projectId} qc={qc} onDelete={() => del.mutate(c.id)} isDeleting={del.isPending && del.variables === c.id} />
         ))}
         {showForm ? (
           <CharacterForm projectId={projectId} qc={qc} onCancel={() => setShowForm(false)} />
@@ -230,7 +238,7 @@ function CharactersTab({ projectId, qc, model }: { projectId: number; qc: Return
   )
 }
 
-function CharacterCard({ item, isEditing, onEdit, onCancel, projectId, qc, onDelete }: { item: CharacterDto; isEditing: boolean; onEdit: () => void; onCancel: () => void; projectId: number; qc: ReturnType<typeof useQueryClient>; onDelete: () => void }) {
+function CharacterCard({ item, isEditing, onEdit, onCancel, projectId, qc, onDelete, isDeleting }: { item: CharacterDto; isEditing: boolean; onEdit: () => void; onCancel: () => void; projectId: number; qc: ReturnType<typeof useQueryClient>; onDelete: () => void; isDeleting?: boolean }) {
   const [open, setOpen] = useState(false)
   if (isEditing) return <CharacterForm projectId={projectId} qc={qc} initial={item} onCancel={onCancel} />
 
@@ -243,7 +251,9 @@ function CharacterCard({ item, isEditing, onEdit, onCancel, projectId, qc, onDel
         </button>
         {item.aliases.length > 0 && <Badge variant="outline" className="text-[10px]">{item.aliases.join(', ')}</Badge>}
         <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onEdit}><Edit3 className="h-3 w-3" /></Button>
-        <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={onDelete}><Trash2 className="h-3 w-3" /></Button>
+        <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" disabled={isDeleting} onClick={onDelete}>
+          {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+        </Button>
       </div>
       {open && (
         <div className="mt-2 space-y-1 text-xs text-muted-foreground">
@@ -314,7 +324,7 @@ function WorldTab({ projectId, qc, model }: { projectId: number; qc: ReturnType<
     onSuccess: () => qc.invalidateQueries({ queryKey: ['worldElements', projectId] }),
   })
 
-  const handleAiGenerated = (json: string) => {
+  const handleAiGenerated = useCallback((json: string) => {
     try {
       const data = JSON.parse(json)
       create.mutate({
@@ -326,7 +336,7 @@ function WorldTab({ projectId, qc, model }: { projectId: number; qc: ReturnType<
     } catch {
       // JSON parse failed, ignore
     }
-  }
+  }, [create])
 
   // Group by category
   const grouped = WORLD_CATEGORIES.map((cat) => ({
@@ -349,7 +359,9 @@ function WorldTab({ projectId, qc, model }: { projectId: number; qc: ReturnType<
                     <div className="flex items-center gap-2">
                       <span className="flex-1 text-sm font-medium">{w.name}</span>
                       <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditing(w.id)}><Edit3 className="h-3 w-3" /></Button>
-                      <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={() => del.mutate(w.id)}><Trash2 className="h-3 w-3" /></Button>
+                      <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" disabled={del.isPending && del.variables === w.id} onClick={() => del.mutate(w.id)}>
+                        {del.isPending && del.variables === w.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                      </Button>
                     </div>
                     {w.description && <p className="mt-1 text-xs text-muted-foreground">{w.description}</p>}
                   </div>
@@ -428,7 +440,7 @@ function TimelineTab({ projectId, qc, model }: { projectId: number; qc: ReturnTy
     onSuccess: () => qc.invalidateQueries({ queryKey: ['timeline', projectId] }),
   })
 
-  const handleAiGenerated = (json: string) => {
+  const handleAiGenerated = useCallback((json: string) => {
     try {
       const data = JSON.parse(json)
       create.mutate({
@@ -441,7 +453,7 @@ function TimelineTab({ projectId, qc, model }: { projectId: number; qc: ReturnTy
     } catch {
       // JSON parse failed, ignore
     }
-  }
+  }, [create, items.length])
 
   return (
     <ScrollArea className="h-full">
@@ -460,7 +472,9 @@ function TimelineTab({ projectId, qc, model }: { projectId: number; qc: ReturnTy
                   {t.description && <p className="mt-1 text-xs text-muted-foreground">{t.description}</p>}
                 </div>
                 <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditing(t.id)}><Edit3 className="h-3 w-3" /></Button>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={() => del.mutate(t.id)}><Trash2 className="h-3 w-3" /></Button>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" disabled={del.isPending && del.variables === t.id} onClick={() => del.mutate(t.id)}>
+                  {del.isPending && del.variables === t.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                </Button>
               </div>
             </div>
           )
@@ -541,7 +555,7 @@ function ForeshadowsTab({ projectId, qc, model }: { projectId: number; qc: Retur
     onSuccess: () => qc.invalidateQueries({ queryKey: ['foreshadows', projectId] }),
   })
 
-  const handleAiGenerated = (json: string) => {
+  const handleAiGenerated = useCallback((json: string) => {
     try {
       const data = JSON.parse(json)
       create.mutate({
@@ -553,7 +567,7 @@ function ForeshadowsTab({ projectId, qc, model }: { projectId: number; qc: Retur
     } catch {
       // JSON parse failed, ignore
     }
-  }
+  }, [create])
 
   return (
     <ScrollArea className="h-full">
@@ -571,7 +585,9 @@ function ForeshadowsTab({ projectId, qc, model }: { projectId: number; qc: Retur
                 </button>
                 <span className="flex-1 text-sm font-medium">{f.title}</span>
                 <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditing(f.id)}><Edit3 className="h-3 w-3" /></Button>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={() => del.mutate(f.id)}><Trash2 className="h-3 w-3" /></Button>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" disabled={del.isPending && del.variables === f.id} onClick={() => del.mutate(f.id)}>
+                  {del.isPending && del.variables === f.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                </Button>
               </div>
               {f.description && <p className="mt-1 text-xs text-muted-foreground">{f.description}</p>}
             </div>
@@ -655,7 +671,7 @@ function ConflictsTab({ projectId, qc, model }: { projectId: number; qc: ReturnT
     onSuccess: () => qc.invalidateQueries({ queryKey: ['conflicts', projectId] }),
   })
 
-  const handleAiGenerated = (json: string) => {
+  const handleAiGenerated = useCallback((json: string) => {
     try {
       const data = JSON.parse(json)
       create.mutate({
@@ -672,7 +688,7 @@ function ConflictsTab({ projectId, qc, model }: { projectId: number; qc: ReturnT
     } catch {
       // JSON parse failed, ignore
     }
-  }
+  }, [create])
 
   return (
     <ScrollArea className="h-full">
@@ -681,7 +697,7 @@ function ConflictsTab({ projectId, qc, model }: { projectId: number; qc: ReturnT
           editing === c.id ? (
             <ConflictForm key={c.id} projectId={projectId} qc={qc} initial={c} onCancel={() => setEditing(null)} />
           ) : (
-            <ConflictCard key={c.id} item={c} onEdit={() => setEditing(c.id)} onDelete={() => del.mutate(c.id)} onCyclePhase={() => cyclePhase.mutate(c)} />
+            <ConflictCard key={c.id} item={c} onEdit={() => setEditing(c.id)} onDelete={() => del.mutate(c.id)} isDeleting={del.isPending && del.variables === c.id} onCyclePhase={() => cyclePhase.mutate(c)} />
           )
         ))}
         {showForm ? (
@@ -705,7 +721,7 @@ function ConflictsTab({ projectId, qc, model }: { projectId: number; qc: ReturnT
   )
 }
 
-function ConflictCard({ item, onEdit, onDelete, onCyclePhase }: { item: ConflictDto; onEdit: () => void; onDelete: () => void; onCyclePhase: () => void }) {
+function ConflictCard({ item, onEdit, onDelete, onCyclePhase, isDeleting }: { item: ConflictDto; onEdit: () => void; onDelete: () => void; onCyclePhase: () => void; isDeleting?: boolean }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="rounded-lg border p-2.5">
@@ -723,7 +739,9 @@ function ConflictCard({ item, onEdit, onDelete, onCyclePhase }: { item: Conflict
           {CONFLICT_TYPES.find((t) => t.value === item.type)?.label ?? item.type}
         </Badge>
         <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onEdit}><Edit3 className="h-3 w-3" /></Button>
-        <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={onDelete}><Trash2 className="h-3 w-3" /></Button>
+        <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" disabled={isDeleting} onClick={onDelete}>
+          {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+        </Button>
       </div>
       {open && (
         <div className="mt-2 space-y-1 text-xs text-muted-foreground">

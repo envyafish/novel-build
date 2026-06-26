@@ -4,6 +4,7 @@ import { writeManuscript, readManuscript } from './io.js'
 import { manuscriptPath, projectDir } from '../projects/paths.js'
 import { apiError } from '../errors.js'
 import { SnapshotService } from '../snapshots/service.js'
+import { withProjectLock } from './mutex.js'
 
 interface SaveSceneInput {
   sceneId: number
@@ -50,58 +51,84 @@ export class ManuscriptService {
   }
 
   async saveScene(input: SaveSceneInput): Promise<{ hash: string }> {
+    // Pre-transaction lookups: resolve scene + project_id so we can scope the lock.
     const scene = this.db
-      .prepare<{ id: number; content_hash: string }>('SELECT id, content_hash FROM scenes WHERE id = ?')
-      .get(input.sceneId)
-    if (!scene) throw apiError(404, 'scene_not_found', `scene ${input.sceneId} not found`)
-    if (!input.force && scene.content_hash !== input.baseHash) {
-      const onDisk = await this.readScene(input.sceneId)
-      throw apiError(422, 'external_change', 'manuscript changed on disk', 'reload the scene', { externalHash: onDisk.hash })
-    }
-
-    // Calculate word count delta for daily tracking
-    const oldText = await this.readScene(input.sceneId).then(r => r.text).catch(() => '')
-    const oldWords = oldText.replace(/\s+/g, '').length
-    const newWords = input.markdown.replace(/\s+/g, '').length
-    const delta = newWords - oldWords
-
-    const loc = this.getProjectDirForScene(input.sceneId)
-    const file = manuscriptPath(input.projectDirAbs, loc.volSlug, loc.chapSlug, loc.sceneSlug)
-    const newHash = await writeManuscript(file, input.markdown)
-    if (input.createSnapshot ?? true) {
-      const snaps = new SnapshotService(this.db, input.projectDirAbs)
-      await snaps.snapshotScene(input.sceneId, input.markdown, 'auto')
-    }
-    this.db
-      .prepare<{ lastInsertRowid: number; changes: number }>('UPDATE scenes SET content_hash = ? WHERE id = ?')
-      .run(newHash, input.sceneId)
-
-    // Track daily word count
-    if (delta !== 0) {
-      const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
-      const projectId = this.getProjectIdForScene(input.sceneId)
-      if (projectId) {
-        this.db
-          .prepare(
-            `INSERT INTO daily_word_log (project_id, date, words_added) VALUES (?, ?, ?)
-             ON CONFLICT(project_id, date) DO UPDATE SET words_added = words_added + ?`,
-          )
-          .run(projectId, today, delta, delta)
-      }
-    }
-
-    return { hash: newHash }
-  }
-
-  private getProjectIdForScene(sceneId: number): number | null {
-    const row = this.db
-      .prepare<{ project_id: number }>(
-        `SELECT v.project_id as project_id FROM scenes s
-         JOIN chapters c ON s.chapter_id = c.id
+      .prepare<{ id: number; content_hash: string; project_id: number }>(
+        `SELECT s.id, s.content_hash, v.project_id as project_id
+         FROM scenes s JOIN chapters c ON s.chapter_id = c.id
          JOIN volumes v ON c.volume_id = v.id WHERE s.id = ?`,
       )
-      .get(sceneId)
-    return row?.project_id ?? null
+      .get(input.sceneId)
+    if (!scene) throw apiError(404, 'scene_not_found', `scene ${input.sceneId} not found`)
+
+    const projectId = scene.project_id
+
+    return withProjectLock(projectId, async () => {
+      // Re-read the file under the per-project lock. This is the canonical
+      // baseHash check and the source of the old text for the word-count delta.
+      // If a concurrent save raced us, we'll see the new content here and either
+      // throw 422 (baseHash mismatch) or compute delta against the new baseline.
+      const onDisk = await this.readScene(input.sceneId)
+
+      if (!input.force && scene.content_hash !== input.baseHash) {
+        throw apiError(422, 'external_change', 'manuscript changed on disk', 'reload the scene', { externalHash: onDisk.hash })
+      }
+
+      // Compute word counts from in-memory strings — no extra file read.
+      const oldWords = onDisk.text.replace(/\s+/g, '').length
+      const newWords = input.markdown.replace(/\s+/g, '').length
+      const delta = newWords - oldWords
+
+      const loc = this.getProjectDirForScene(input.sceneId)
+      const file = manuscriptPath(input.projectDirAbs, loc.volSlug, loc.chapSlug, loc.sceneSlug)
+
+      // File writes happen OUTSIDE the DB transaction:
+      //   - writeManuscript is already atomic (temp + fsync + rename + recordSelfWrite).
+      //   - The snapshot object is content-addressed; if the subsequent DB write
+      //     fails we leave an orphan snapshot file behind, which is harmless
+      //     (no DB row references it; existing GC will reclaim it).
+      // Doing these outside the transaction means the transaction body stays
+      // purely synchronous, so BEGIN IMMEDIATE works as intended.
+      const newHash = await writeManuscript(file, input.markdown)
+
+      let snapshotHash: string | null = null
+      if (input.createSnapshot ?? true) {
+        const snaps = new SnapshotService(this.db, input.projectDirAbs)
+        // Snapshot the OLD text so the user can restore to the pre-save state.
+        snapshotHash = await snaps.writeSnapshotOnly(onDisk.text)
+      }
+
+      // All DB writes commit atomically. BEGIN IMMEDIATE acquires the write
+      // lock at the start, which combined with the per-project mutex above
+      // means we cannot race with another saveScene on the same project.
+      const now = new Date().toISOString()
+      this.db.runInWriteTx(() => {
+        this.db
+          .prepare('UPDATE scenes SET content_hash = ? WHERE id = ?')
+          .run(newHash, input.sceneId)
+
+        if (snapshotHash) {
+          const last = this.db
+            .prepare<{ hash: string | null }>('SELECT hash FROM snapshots_meta WHERE scene_id = ? ORDER BY created_at DESC LIMIT 1')
+            .get(input.sceneId)
+          this.db
+            .prepare('INSERT OR IGNORE INTO snapshots_meta (hash, kind, scene_id, created_at, parent_hash) VALUES (?, ?, ?, ?, ?)')
+            .run(snapshotHash, 'auto', input.sceneId, now, last?.hash ?? null)
+        }
+
+        if (delta !== 0) {
+          const today = now.slice(0, 10) // YYYY-MM-DD
+          this.db
+            .prepare(
+              `INSERT INTO daily_word_log (project_id, date, words_added) VALUES (?, ?, ?)
+               ON CONFLICT(project_id, date) DO UPDATE SET words_added = words_added + excluded.words_added`,
+            )
+            .run(projectId, today, delta)
+        }
+      })
+
+      return { hash: newHash }
+    })
   }
 
   async listSnapshots(sceneId: number, projectDirAbs: string) {

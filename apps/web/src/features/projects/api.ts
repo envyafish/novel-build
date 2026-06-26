@@ -9,6 +9,13 @@ export interface ProjectStatsDto {
   goal?: { daily_target_words: number; weekly_target_scenes: number }
 }
 
+export interface ChapterContentDto {
+  chapterId: number
+  scenes: Array<{ id: number; title: string; markdown: string; wordCount: number }>
+  titles: Array<{ id: number; title: string }>
+  text: string
+}
+
 export const projectsApi = {
   list: () => api<ProjectDto[]>('/api/projects'),
   create: (name: string, slug: string) =>
@@ -44,4 +51,5 @@ export const outlineApi = {
     api<SceneDto>(`/api/scenes/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteChapter: (id: number) => api<{ ok: true }>(`/api/chapters/${id}`, { method: 'DELETE' }),
   deleteScene: (id: number) => api<{ ok: true }>(`/api/scenes/${id}`, { method: 'DELETE' }),
+  chapterContent: (id: number) => api<ChapterContentDto>(`/api/chapters/${id}/content`),
 }

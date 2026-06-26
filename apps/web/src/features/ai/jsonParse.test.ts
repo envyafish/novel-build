@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseAiJson, extractJson, stripThinking } from './jsonParse.js'
+import { parseAiJson, extractJson, stripThinking } from '@novel/shared'
 
 describe('parseAiJson', () => {
   it('parses clean JSON', () => {

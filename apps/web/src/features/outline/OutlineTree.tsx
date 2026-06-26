@@ -18,46 +18,41 @@ const STATUS_STYLES: Record<EntityStatus, string> = {
   done: 'bg-green-500/15 text-green-700 dark:text-green-300',
 }
 
-interface Props {
-  nodes: OutlineNode[]
-  currentSceneId?: number | undefined
-  /** Chapter currently selected for chapter-level AI actions. Highlights in the tree. */
-  selectedChapterId?: number | undefined
+/**
+ * Bundled event handlers. The whole object is passed as a single prop
+ * (`handlers`) so consumers can memoize it once and avoid re-rendering
+ * every tree node on each EditorPage keystroke. Each field may be
+ * omitted if the consumer doesn't need that action.
+ */
+export interface OutlineHandlers {
   onSelectScene: (sceneId: number) => void
-  /** Fires when user clicks the chapter label (not when expanding/collapsing). */
   onSelectChapter?: ((chapterId: number) => void) | undefined
   onAddVolume?: (() => void) | undefined
-  onAddChapter: (volumeId: number) => void
-  onAddScene: (chapterId: number) => void
+  onAddChapter?: ((volumeId: number) => void) | undefined
+  onAddScene?: ((chapterId: number) => void) | undefined
   onCycleStatus?: ((sceneId: number) => void) | undefined
   onDeleteScene?: ((sceneId: number) => void) | undefined
   onDeleteChapter?: ((chapterId: number) => void) | undefined
   onRenameScene?: ((sceneId: number) => void) | undefined
   onRenameChapter?: ((chapterId: number) => void) | undefined
   onRenameVolume?: ((volumeId: number) => void) | undefined
-  /** Chapter-level review (auto_review over all scenes in the chapter). */
   onReviewChapter?: ((chapterId: number) => void) | undefined
-  /** Chapter-level extract (consistency_check over all scenes in the chapter). */
   onExtractChapter?: ((chapterId: number) => void) | undefined
+}
+
+interface Props {
+  nodes: OutlineNode[]
+  currentSceneId?: number | undefined
+  /** Chapter currently selected for chapter-level AI actions. Highlights in the tree. */
+  selectedChapterId?: number | undefined
+  handlers: OutlineHandlers
 }
 
 export const OutlineTree = memo(function OutlineTree({
   nodes,
   currentSceneId,
   selectedChapterId,
-  onSelectScene,
-  onSelectChapter,
-  onAddVolume,
-  onAddChapter,
-  onAddScene,
-  onCycleStatus,
-  onDeleteScene,
-  onDeleteChapter,
-  onRenameScene,
-  onRenameChapter,
-  onRenameVolume,
-  onReviewChapter,
-  onExtractChapter,
+  handlers,
 }: Props) {
   return (
     <ScrollArea className="h-full">
@@ -68,26 +63,15 @@ export const OutlineTree = memo(function OutlineTree({
             node={v}
             currentSceneId={currentSceneId}
             selectedChapterId={selectedChapterId}
-            onSelectScene={onSelectScene}
-            onSelectChapter={onSelectChapter}
-            onAddChapter={onAddChapter}
-            onAddScene={onAddScene}
-            onCycleStatus={onCycleStatus}
-            onDeleteScene={onDeleteScene}
-            onDeleteChapter={onDeleteChapter}
-            onRenameScene={onRenameScene}
-            onRenameChapter={onRenameChapter}
-            onRenameVolume={onRenameVolume}
-            onReviewChapter={onReviewChapter}
-            onExtractChapter={onExtractChapter}
+            handlers={handlers}
           />
         ))}
-        {onAddVolume && (
+        {handlers.onAddVolume && (
           <Button
             variant="ghost"
             size="sm"
             className="mt-1 w-full justify-start gap-1.5 text-xs text-muted-foreground"
-            onClick={onAddVolume}
+            onClick={handlers.onAddVolume}
           >
             <Plus className="h-3 w-3" /> 新建卷
           </Button>
@@ -101,19 +85,13 @@ const VolumeNode = memo(function VolumeNode({
   node,
   currentSceneId,
   selectedChapterId,
-  onSelectScene,
-  onSelectChapter,
-  onAddChapter,
-  onAddScene,
-  onCycleStatus,
-  onDeleteScene,
-  onDeleteChapter,
-  onRenameScene,
-  onRenameChapter,
-  onRenameVolume,
-  onReviewChapter,
-  onExtractChapter,
-}: { node: OutlineNode } & Omit<Props, 'nodes' | 'onAddVolume'>) {
+  handlers,
+}: {
+  node: OutlineNode
+  currentSceneId?: number | undefined
+  selectedChapterId?: number | undefined
+  handlers: OutlineHandlers
+}) {
   const [open, setOpen] = useState(true)
   return (
     <div>
@@ -128,12 +106,12 @@ const VolumeNode = memo(function VolumeNode({
           <Layers className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate">{node.label}</span>
         </button>
-        {onRenameVolume && (
+        {handlers.onRenameVolume && (
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation()
-              onRenameVolume(node.id)
+              handlers.onRenameVolume!(node.id)
             }}
             className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground group-hover/vol:opacity-100"
             aria-label="重命名卷"
@@ -151,26 +129,19 @@ const VolumeNode = memo(function VolumeNode({
               node={c}
               currentSceneId={currentSceneId}
               selectedChapterId={selectedChapterId}
-              onSelectScene={onSelectScene}
-              onSelectChapter={onSelectChapter}
-              onAddScene={onAddScene}
-              onCycleStatus={onCycleStatus}
-              onDeleteScene={onDeleteScene}
-              onDeleteChapter={onDeleteChapter}
-              onRenameScene={onRenameScene}
-              onRenameChapter={onRenameChapter}
-              onReviewChapter={onReviewChapter}
-              onExtractChapter={onExtractChapter}
+              handlers={handlers}
             />
           ))}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="mt-0.5 w-full justify-start gap-1.5 text-xs text-muted-foreground"
-            onClick={() => onAddChapter(node.id)}
-          >
-            <Plus className="h-3 w-3" /> 新建章节
-          </Button>
+          {handlers.onAddChapter && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-0.5 w-full justify-start gap-1.5 text-xs text-muted-foreground"
+              onClick={() => handlers.onAddChapter!(node.id)}
+            >
+              <Plus className="h-3 w-3" /> 新建章节
+            </Button>
+          )}
         </div>
       )}
     </div>
@@ -181,17 +152,13 @@ const ChapterNode = memo(function ChapterNode({
   node,
   currentSceneId,
   selectedChapterId,
-  onSelectScene,
-  onSelectChapter,
-  onAddScene,
-  onCycleStatus,
-  onDeleteScene,
-  onDeleteChapter,
-  onRenameScene,
-  onRenameChapter,
-  onReviewChapter,
-  onExtractChapter,
-}: { node: OutlineNode } & Omit<Props, 'nodes' | 'onAddChapter' | 'onAddVolume' | 'onRenameVolume'>) {
+  handlers,
+}: {
+  node: OutlineNode
+  currentSceneId?: number | undefined
+  selectedChapterId?: number | undefined
+  handlers: OutlineHandlers
+}) {
   const [open, setOpen] = useState(true)
   const isSelected = node.id === selectedChapterId
   return (
@@ -212,10 +179,10 @@ const ChapterNode = memo(function ChapterNode({
           />
         </button>
         <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        {onSelectChapter ? (
+        {handlers.onSelectChapter ? (
           <button
             type="button"
-            onClick={() => onSelectChapter(node.id)}
+            onClick={() => handlers.onSelectChapter!(node.id)}
             className="min-w-0 flex-1 cursor-pointer truncate text-left"
             title="选择章节以触发 AI 审稿 / 提取"
           >
@@ -225,12 +192,12 @@ const ChapterNode = memo(function ChapterNode({
           <span className="min-w-0 flex-1 truncate">{node.label}</span>
         )}
         <div className="flex shrink-0 items-center gap-0.5">
-          {onReviewChapter && (
+          {handlers.onReviewChapter && (
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation()
-                onReviewChapter(node.id)
+                handlers.onReviewChapter!(node.id)
               }}
               className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
               aria-label="审章节"
@@ -239,12 +206,12 @@ const ChapterNode = memo(function ChapterNode({
               <PenLine className="h-3 w-3" />
             </button>
           )}
-          {onExtractChapter && (
+          {handlers.onExtractChapter && (
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation()
-                onExtractChapter(node.id)
+                handlers.onExtractChapter!(node.id)
               }}
               className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
               aria-label="从章节提取设定"
@@ -253,12 +220,12 @@ const ChapterNode = memo(function ChapterNode({
               <ShieldCheck className="h-3 w-3" />
             </button>
           )}
-          {onRenameChapter && (
+          {handlers.onRenameChapter && (
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation()
-                onRenameChapter(node.id)
+                handlers.onRenameChapter!(node.id)
               }}
               className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground opacity-60 transition-opacity group-hover/ch:opacity-100"
               aria-label="重命名章节"
@@ -267,12 +234,12 @@ const ChapterNode = memo(function ChapterNode({
               <Pencil className="h-3 w-3" />
             </button>
           )}
-          {onDeleteChapter && (
+          {handlers.onDeleteChapter && (
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation()
-                onDeleteChapter(node.id)
+                handlers.onDeleteChapter!(node.id)
               }}
               className="rounded p-1 text-red-600 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-950 opacity-60 transition-opacity group-hover/ch:opacity-100"
               aria-label="删除章节"
@@ -290,20 +257,19 @@ const ChapterNode = memo(function ChapterNode({
               key={s.id}
               node={s}
               isCurrent={s.id === currentSceneId}
-              onSelectScene={onSelectScene}
-              onCycleStatus={onCycleStatus}
-              onDeleteScene={onDeleteScene}
-              onRenameScene={onRenameScene}
+              handlers={handlers}
             />
           ))}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="mt-0.5 w-full justify-start gap-1.5 text-xs text-muted-foreground"
-            onClick={() => onAddScene(node.id)}
-          >
-            <Plus className="h-3 w-3" /> 新建场景
-          </Button>
+          {handlers.onAddScene && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-0.5 w-full justify-start gap-1.5 text-xs text-muted-foreground"
+              onClick={() => handlers.onAddScene!(node.id)}
+            >
+              <Plus className="h-3 w-3" /> 新建场景
+            </Button>
+          )}
         </div>
       )}
     </div>
@@ -313,17 +279,11 @@ const ChapterNode = memo(function ChapterNode({
 const SceneNode = memo(function SceneNode({
   node,
   isCurrent,
-  onSelectScene,
-  onCycleStatus,
-  onDeleteScene,
-  onRenameScene,
+  handlers,
 }: {
   node: OutlineNode
   isCurrent: boolean
-  onSelectScene: (sceneId: number) => void
-  onCycleStatus?: ((sceneId: number) => void) | undefined
-  onDeleteScene?: ((sceneId: number) => void) | undefined
-  onRenameScene?: ((sceneId: number) => void) | undefined
+  handlers: OutlineHandlers
 }) {
   const status = (node.status ?? 'draft') as EntityStatus
   return (
@@ -336,7 +296,7 @@ const SceneNode = memo(function SceneNode({
       )}
     >
       <button
-        onClick={() => onSelectScene(node.id)}
+        onClick={() => handlers.onSelectScene(node.id)}
         className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden px-2 py-1 text-left text-sm"
       >
         <FileText className="h-3.5 w-3.5 shrink-0" />
@@ -346,12 +306,12 @@ const SceneNode = memo(function SceneNode({
         </span>
       </button>
       <div className="absolute right-0 top-0 flex h-full items-center gap-0.5 bg-inherit px-1 opacity-0 transition-opacity group-hover/scene:opacity-100">
-        {onRenameScene && (
+        {handlers.onRenameScene && (
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation()
-              onRenameScene(node.id)
+              handlers.onRenameScene!(node.id)
             }}
             className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
             aria-label="重命名场景"
@@ -360,12 +320,12 @@ const SceneNode = memo(function SceneNode({
             <Pencil className="h-3 w-3" />
           </button>
         )}
-        {onCycleStatus && (
+        {handlers.onCycleStatus && (
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation()
-              onCycleStatus(node.id)
+              handlers.onCycleStatus!(node.id)
             }}
             className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
             aria-label="切换状态"
@@ -374,12 +334,12 @@ const SceneNode = memo(function SceneNode({
             <RefreshCw className="h-3 w-3" />
           </button>
         )}
-        {onDeleteScene && (
+        {handlers.onDeleteScene && (
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation()
-              onDeleteScene(node.id)
+              handlers.onDeleteScene!(node.id)
             }}
             className="rounded p-1 text-red-600 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-950"
             aria-label="删除场景"

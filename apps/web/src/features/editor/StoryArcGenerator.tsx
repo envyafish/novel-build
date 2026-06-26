@@ -5,7 +5,7 @@ import { useAiStream } from '../../hooks/useAiStream.js'
 import { useToast } from '@/components/ui/toast'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { stripThinking } from '../ai/jsonParse.js'
+import { stripThinking } from '@novel/shared'
 import {
   Dialog,
   DialogContent,

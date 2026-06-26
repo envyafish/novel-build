@@ -23,9 +23,11 @@ describe('OutlineTree', () => {
             ],
           },
         ]}
-        onSelectScene={onSelect}
-        onAddChapter={() => {}}
-        onAddScene={() => {}}
+        handlers={{
+          onSelectScene: onSelect,
+          onAddChapter: () => {},
+          onAddScene: () => {},
+        }}
       />,
     )
     fireEvent.click(screen.getByText('Scene 1'))
@@ -52,11 +54,13 @@ describe('OutlineTree', () => {
             ],
           },
         ]}
-        onSelectScene={onSelect}
-        onAddChapter={() => {}}
-        onAddScene={() => {}}
-        onCycleStatus={onCycle}
-        onDeleteScene={() => {}}
+        handlers={{
+          onSelectScene: onSelect,
+          onAddChapter: () => {},
+          onAddScene: () => {},
+          onCycleStatus: onCycle,
+          onDeleteScene: () => {},
+        }}
       />,
     )
     expect(screen.getByText('草稿')).toBeInTheDocument()
@@ -83,10 +87,12 @@ describe('OutlineTree', () => {
             ],
           },
         ]}
-        onSelectScene={() => {}}
-        onAddChapter={() => {}}
-        onAddScene={() => {}}
-        onDeleteScene={onDelete}
+        handlers={{
+          onSelectScene: () => {},
+          onAddChapter: () => {},
+          onAddScene: () => {},
+          onDeleteScene: onDelete,
+        }}
       />,
     )
     fireEvent.click(screen.getByLabelText('删除场景'))

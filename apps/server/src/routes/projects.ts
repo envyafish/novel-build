@@ -7,7 +7,7 @@ import { ProjectRepo } from '../projects/repo.js'
 import type { Database } from '../db/sqlite.js'
 import { apiError } from '../errors.js'
 import { manuscriptPath } from '../projects/paths.js'
-import { extractJson, stripThinking } from '../util/jsonExtract.js'
+import { extractJson, stripThinking } from '@novel/shared'
 
 const createBody = z.object({
   name: z.string().min(1),

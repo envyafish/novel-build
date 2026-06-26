@@ -39,6 +39,56 @@ export function registerSceneRoutes(app: any, db: Database, novelsDir: string) {
     }
   })
 
+  /**
+   * Return all scenes in a chapter (ordered by `order_index`) along with
+   * their concatenated markdown. Replaces the web client's previous N×fetch
+   * loop for chapter-level AI review/extract flows.
+   */
+  app.get<{ Params: { id: string } }>('/api/chapters/:id/content', async (req) => {
+    const chapterId = Number(req.params.id)
+    if (!Number.isFinite(chapterId) || chapterId <= 0) {
+      throw apiError(400, 'invalid_id', 'chapter id must be a positive integer')
+    }
+    // Distinguish "chapter does not exist" (404) from "chapter has 0 scenes" (200).
+    const chapter = repo.getChapter(chapterId)
+    if (!chapter) throw apiError(404, 'chapter_not_found', `chapter ${chapterId} not found`)
+
+    const sceneRows = db
+      .prepare<{ id: number; title: string; order_index: number }>(
+        'SELECT id, title, order_index FROM scenes WHERE chapter_id = ? ORDER BY order_index',
+      )
+      .all(chapterId)
+
+    // Parallel disk reads. Tolerate ENOENT (newly created scene, never written)
+    // by treating it as empty markdown, mirroring `readManuscript`'s own behavior.
+    const results = await Promise.allSettled(sceneRows.map((s) => svc.readScene(s.id)))
+
+    const scenes: Array<{ id: number; title: string; markdown: string; wordCount: number }> = []
+    const titles: Array<{ id: number; title: string }> = []
+    let text = ''
+    for (let i = 0; i < sceneRows.length; i++) {
+      const row = sceneRows[i]
+      const r = results[i]
+      let markdown = ''
+      if (r.status === 'fulfilled') {
+        markdown = r.value.text
+      } else {
+        const code = (r.reason as NodeJS.ErrnoException | undefined)?.code
+        if (code !== 'ENOENT') throw r.reason
+      }
+      scenes.push({
+        id: row.id,
+        title: row.title,
+        markdown,
+        wordCount: markdown.replace(/\s+/g, '').length,
+      })
+      titles.push({ id: row.id, title: row.title })
+      text += `### ${row.title}\n\n${markdown}\n\n`
+    }
+
+    return { chapterId, scenes, titles, text }
+  })
+
   app.put<{ Params: { id: string } }>('/api/scenes/:id', async (req) => {
     const id = Number(req.params.id)
     const body = saveBody.parse(req.body)

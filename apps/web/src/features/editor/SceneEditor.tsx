@@ -13,7 +13,17 @@ interface Props {
   onSelectionText?: ((text: string | null) => void) | undefined
   onForceSave?: (() => void) | undefined
   placeholder?: string | undefined
-  onEditorReady?: ((api: { setContentFromText: (text: string) => void }) => void) | undefined
+  onEditorReady?: ((api: {
+    setContentFromText: (text: string) => void
+    /**
+     * Replace the text in the editor's current selection with `text`. Unlike
+     * a string `content.replace(selectionText, ...)`, this works even if the
+     * user typed into the selection during streaming — ProseMirror positions
+     * are stable for the doc snapshot they were captured from. Returns true
+     * if a non-empty range was replaced, false if there was no selection.
+     */
+    replaceSelectionWithText: (text: string) => boolean
+  }) => void) | undefined
   focusMode?: boolean | undefined
   className?: string | undefined
 }
@@ -62,11 +72,33 @@ export function SceneEditor({
     [editor, onChangeMarkdown],
   )
 
+  const replaceSelectionWithText = useCallback(
+    (text: string): boolean => {
+      if (!editor) return false
+      const { from, to } = editor.state.selection
+      if (from === to) return false
+      // Insert the new content at the current selection range. This works
+      // even if the user typed into the selection during streaming: the
+      // positions are anchored to the live doc, so we replace whatever sits
+      // there now (rather than the original selection text). The pre-fix
+      // `content.replace(selectionText, ...)` would silently no-op if the
+      // selection text drifted.
+      const html = textToHtml(text)
+      editor
+        .chain()
+        .focus()
+        .insertContentAt({ from, to }, html)
+        .run()
+      return true
+    },
+    [editor],
+  )
+
   useEffect(() => {
     if (onEditorReady && editor) {
-      onEditorReady({ setContentFromText })
+      onEditorReady({ setContentFromText, replaceSelectionWithText })
     }
-  }, [editor, onEditorReady, setContentFromText])
+  }, [editor, onEditorReady, setContentFromText, replaceSelectionWithText])
 
   useEffect(() => {
     if (!editor) return

@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { scanManuscripts } from './watcher.js'
+import type { ManuscriptFingerprint } from './watcher.js'
 import { readManuscript } from './io.js'
 import { consumeSelfWrite } from './selfWriteRegistry.js'
 import { ProjectRepo } from '../projects/repo.js'
@@ -21,6 +22,20 @@ import type { Database } from '../db/sqlite.js'
  *
  * Best-effort: any IO or DB error is swallowed so the timer keeps running.
  */
+
+/**
+ * In-memory cache of last-seen disk fingerprints, keyed by absolute file path.
+ * On subsequent scans we only re-hash + DB-update files whose fingerprint
+ * changed since the previous scan. This is the common case for "no external
+ * edits happened in the last 60s" — without this cache, every scan re-reads
+ * and re-SHA256s every scene, which is O(total scenes) per tick.
+ */
+const lastSeen = new Map<string, ManuscriptFingerprint>()
+
+function fingerprintsEqual(a: ManuscriptFingerprint, b: ManuscriptFingerprint): boolean {
+  return a.size === b.size && a.mtimeMs === b.mtimeMs
+}
+
 export async function syncDiskHashes(db: Database, novelsDir: string): Promise<{ scanned: number; updated: number }> {
   const repo = new ProjectRepo(db)
   let scanned = 0
@@ -31,7 +46,7 @@ export async function syncDiskHashes(db: Database, novelsDir: string): Promise<{
   )
   for (const proj of projects) {
     const root = path.join(novelsDir, proj.slug, 'manuscripts')
-    const diskHashes: Record<string, string> = await scanManuscripts(root)
+    const fingerprints: Record<string, ManuscriptFingerprint> = await scanManuscripts(root)
     const outline = repo.getOutline(proj.id)
     for (const scene of outline.scenes) {
       const chap = outline.chapters.find((c) => c.id === scene.chapter_id)
@@ -40,28 +55,37 @@ export async function syncDiskHashes(db: Database, novelsDir: string): Promise<{
       if (!vol) continue
       const filePath = path.join(root, vol.slug, chap.slug, `${scene.slug}.md`)
       scanned++
-      const diskHash = diskHashes[filePath]
-      if (diskHash && diskHash !== scene.content_hash) {
-        // Skip if this mismatch is the server's own recent write echoing back.
-        // `ManuscriptService.saveScene` updates `scenes.content_hash` atomically
-        // with the file write, so the DB row is already correct — overwriting it
-        // here would clobber the freshly-saved hash with whatever stale value
-        // happens to be on disk and trip a spurious 422 on the user's next PUT.
-        if (consumeSelfWrite(filePath, diskHash)) continue
-        // Re-read disk to avoid TOCTOU race with concurrent saveScene.
-        // The initial diskHashes snapshot may be stale if a save happened
-        // between the scan and this comparison.
-        try {
-          const fresh = await readManuscript(filePath)
-          if (fresh.hash !== scene.content_hash) {
-            updateStmt.run(fresh.hash, scene.id)
-            updated++
+      const fp = fingerprints[filePath]
+      if (!fp) continue
+      // Fast path: if the disk fingerprint hasn't changed since the last scan,
+      // skip the file read and hash. This is the steady-state for an idle
+      // editor (no external edits). After processing, update the cache for
+      // next time.
+      const prev = lastSeen.get(filePath)
+      if (prev && fingerprintsEqual(prev, fp)) continue
+
+      // Fingerprint changed (or first scan): hash the file and compare to DB.
+      try {
+        const fresh = await readManuscript(filePath)
+        if (fresh.hash !== scene.content_hash) {
+          // Skip if this mismatch is the server's own recent write echoing back.
+          if (consumeSelfWrite(filePath, fresh.hash)) {
+            lastSeen.set(filePath, fp)
+            continue
           }
-        } catch {
-          // Best-effort: skip on IO error
+          updateStmt.run(fresh.hash, scene.id)
+          updated++
         }
+        lastSeen.set(filePath, fp)
+      } catch {
+        // Best-effort: skip on IO error; don't update the cache so we retry next tick.
       }
     }
   }
   return { scanned, updated }
+}
+
+/** Test-only: clear the in-memory fingerprint cache. */
+export function _clearFingerprintCache(): void {
+  lastSeen.clear()
 }

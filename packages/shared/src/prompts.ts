@@ -3,6 +3,20 @@ import type { ChatMessage, CompletionMode } from './ai.js'
 export interface ModePrompt {
   system: string
   buildUser: (inputText: string, contextText: string) => string
+  /**
+   * Soft upper bound on the *output* size, in tokens, for this mode. Used
+   * for two things:
+   * - The web client's progress bar (`state.progressPct`) needs a denominator
+   *   to convert streamed text length into a percentage. Without this, the
+   *   bar sits at 0% for the whole stream and only jumps to 100% at the end.
+   * - Server can optionally pass this through to the provider's `max_tokens`
+   *   parameter to cap runaway generation.
+   *
+   * Tuned to ~1.3 tokens per Chinese character (typical CJK tokenization)
+   * with 50% headroom over the prompt's stated word cap so the bar reaches
+   * 100% at the prompt's natural endpoint rather than running off the top.
+   */
+  maxOutputTokens: number
 }
 
 const COMMON_SYSTEM =
@@ -13,31 +27,37 @@ export const MODE_PROMPTS: Record<CompletionMode, ModePrompt> = {
     system: COMMON_SYSTEM,
     buildUser: (input, ctx) =>
       `Continue the scene below in the same style. Do not repeat prior text. Keep it under 400 Chinese characters.\n\n[Context]\n${ctx}\n\n[Continue from]\n${input}`,
+    maxOutputTokens: 800,
   },
   polish: {
     system: COMMON_SYSTEM,
     buildUser: (input, ctx) =>
       `Polish the following passage. Keep the meaning, voice, and approximate length. Do not add new plot points.\n\n[Context]\n${ctx}\n\n[Passage]\n${input}`,
+    maxOutputTokens: 4000,
   },
   rewrite: {
     system: COMMON_SYSTEM,
     buildUser: (input, ctx) =>
       `Rewrite the following passage with the same meaning and length, but with fresher wording.\n\n[Context]\n${ctx}\n\n[Passage]\n${input}`,
+    maxOutputTokens: 4000,
   },
   expand: {
     system: COMMON_SYSTEM,
     buildUser: (input, ctx) =>
       `Expand the following passage to roughly 1.5x–2x its length by adding sensory detail, interiority, and pacing. Keep all existing plot beats.\n\n[Context]\n${ctx}\n\n[Passage]\n${input}`,
+    maxOutputTokens: 8000,
   },
   condense: {
     system: COMMON_SYSTEM,
     buildUser: (input, ctx) =>
       `Condense the following passage to roughly half its length while keeping the essential beats.\n\n[Context]\n${ctx}\n\n[Passage]\n${input}`,
+    maxOutputTokens: 2000,
   },
   generate_scene: {
     system: COMMON_SYSTEM,
     buildUser: (input, ctx) =>
       `Write a complete scene based on the description below. Match the style and tone of the existing story context. Write 800–1500 Chinese characters. Output only the scene prose, no headings or commentary.\n\n[Story Context]\n${ctx}\n\n[Scene Description]\n${input}`,
+    maxOutputTokens: 3000,
   },
   generate_chapter: {
     system: COMMON_SYSTEM,

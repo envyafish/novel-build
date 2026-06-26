@@ -61,10 +61,10 @@ Three-tier outline (the "骨架"): `volumes → chapters → scenes`. Chapters c
 ### AI request lifecycle (the hot path)
 
 `POST /api/ai/complete` (`apps/server/src/routes/ai.ts:55`) is the only AI endpoint. It:
-1. Zod-validates body (`sceneId?`, `projectId?`, `mode`, `model`, `inputText`, optional `overrideMessages` + `draftId`).
+1. Zod-validates body (`sceneId?`, `projectId?`, `mode`, `model`, `inputText`, optional `overrideMessages`).
 2. Builds context in `apps/server/src/ai/context.ts` — pulls last-scene tail, world summary, outline summary (only for `NEEDS_OUTLINE` modes).
 3. Acquires a `StreamLimiter` slot (max **2 concurrent streams**).
-4. Streams NDJSON frames back; persists to `ai_drafts` row every ~200ms.
+4. Streams NDJSON frames back; no server-side persistence of in-progress drafts (state lives only in the client's `useAiStream` hook).
 5. `projectId` is the preferred project-resolution key (server uses it directly, no scene JOIN). `sceneId` is optional — only needed for modes that pull scene-specific context (previous scene tail, scene notes, outline). Frontend always passes `projectId`.
 
 ### Prompt registry

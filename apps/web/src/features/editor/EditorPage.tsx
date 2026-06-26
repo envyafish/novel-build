@@ -6,7 +6,7 @@ import { api, ApiClientError } from '../../api/client.js'
 import type { SceneDetailDto, AiSettingsDto, EntityStatus, ProjectDto, WorldCategory, ConflictType, ForeshadowStatus, CompletionMode } from '@novel/shared'
 import { SceneEditor } from './SceneEditor.js'
 import { SnapshotHistory } from './SnapshotHistory.js'
-import { OutlineTree } from '../outline/OutlineTree.js'
+import { OutlineTree, type OutlineHandlers } from '../outline/OutlineTree.js'
 import { outlineApi } from '../outline/api.js'
 import { buildTree } from '../outline/tree-utils.js'
 import { AiSidebar } from '../ai/AiPanel.js'
@@ -15,7 +15,7 @@ import { WorldPanel } from '../world/WorldPanel.js'
 import { worldApi } from '../world/api.js'
 import { formatAiOutput } from '../ai/format.js'
 import { type ParsedScene } from '../ai/sceneSplitter.js'
-import { parseAiJson } from '../ai/jsonParse.js'
+import { parseAiJson } from '@novel/shared'
 import { runAiCompletion } from '../ai/runAi.js'
 import { applyGeneratedScenes } from '../ai/sceneBatchCreate.js'
 import { useAiStream } from '../../hooks/useAiStream.js'
@@ -28,6 +28,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { usePrompt } from '@/components/ui/prompt-dialog'
 import { useConfirm } from '@/components/ui/confirm-dialog'
 import { useToast } from '@/components/ui/toast'
+import { useErrorToast } from '../../hooks/useErrorToast.js'
 import { SaveStatus, type SaveState } from './SaveStatus.js'
 import { WordCounter } from './WordCounter.js'
 import { ProjectStatsCard } from './ProjectStatsCard.js'
@@ -69,13 +70,23 @@ export function EditorPage() {
   const [sidebarTab, setSidebarTab] = useState<'outline' | 'world'>('outline')
   const qc = useQueryClient()
   const { toast } = useToast()
+  const { showError } = useErrorToast()
   const { prompt } = usePrompt()
   const { confirm } = useConfirm()
 
-  const editorApiRef = useRef<{ setContentFromText: (text: string) => void } | null>(null)
-  const handleEditorReady = useCallback((api: { setContentFromText: (text: string) => void }) => {
-    editorApiRef.current = api
-  }, [])
+  const editorApiRef = useRef<{
+    setContentFromText: (text: string) => void
+    replaceSelectionWithText: (text: string) => boolean
+  } | null>(null)
+  const handleEditorReady = useCallback(
+    (api: {
+      setContentFromText: (text: string) => void
+      replaceSelectionWithText: (text: string) => boolean
+    }) => {
+      editorApiRef.current = api
+    },
+    [],
+  )
 
   const outline = useQuery({ queryKey: ['outline', projectId], queryFn: () => outlineApi.fetch(projectId), enabled: projectId > 0 })
   const project = useQuery({ queryKey: ['project', projectId], queryFn: () => api<ProjectDto>(`/api/projects/${projectId}`), enabled: projectId > 0 })
@@ -138,8 +149,7 @@ export function EditorPage() {
       await api<{ hash: string }>(`/api/scenes/${sceneId}/snapshot`, { method: 'POST' })
       toast({ kind: 'success', title: '快照已创建' })
     } catch (e) {
-      const msg = e instanceof ApiClientError ? e.message : (e as Error).message
-      toast({ kind: 'error', title: '快照失败', description: msg })
+      showError(e, '快照失败')
     }
   }, [sceneId, toast])
 
@@ -169,7 +179,7 @@ export function EditorPage() {
           setLastSavedAt(Date.now())
           toast({ kind: 'success', title: '已强制保存' })
         } catch (e2) {
-          toast({ kind: 'error', title: '强制保存失败', description: (e2 as Error).message })
+          showError(e2, '强制保存失败')
         }
       }
     },
@@ -237,7 +247,17 @@ export function EditorPage() {
     }, 5 * 60 * 1000)
     return () => clearInterval(interval)
   }, [sceneId])
-  useDebouncedSave(content, save, 800)
+  const debouncedSave = useDebouncedSave(content, save, 800)
+  // Flush any pending debounced save BEFORE switching scenes. Without this,
+  // a save that's still within the 800ms window will fire after the scene
+  // has changed and write the new content into the wrong scene row.
+  const lastSceneIdRef = useRef<number | undefined>(sceneId)
+  useEffect(() => {
+    if (lastSceneIdRef.current !== sceneId) {
+      debouncedSave.flush()
+      lastSceneIdRef.current = sceneId
+    }
+  }, [sceneId, debouncedSave])
 
   const addChapter = useMutation({
     mutationFn: async (volumeId: number) => {
@@ -285,7 +305,7 @@ export function EditorPage() {
       toast({ kind: 'success', title: '场景已删除' })
     },
     onError: (err) => {
-      toast({ kind: 'error', title: '删除失败', description: (err as Error).message })
+      showError(err, '删除失败')
     },
   })
 
@@ -309,7 +329,7 @@ export function EditorPage() {
       toast({ kind: 'success', title: '章节已删除' })
     },
     onError: (err) => {
-      toast({ kind: 'error', title: '删除失败', description: (err as Error).message })
+      showError(err, '删除失败')
     },
   })
 
@@ -370,7 +390,7 @@ export function EditorPage() {
         qc.invalidateQueries({ queryKey: ['outline', projectId] })
         toast({ kind: 'success', title: '已重命名' })
       } catch (e) {
-        toast({ kind: 'error', title: '重命名失败', description: (e as Error).message })
+        showError(e, '重命名失败')
       }
     },
     [outlineData, prompt, qc, projectId, toast],
@@ -391,7 +411,7 @@ export function EditorPage() {
         qc.invalidateQueries({ queryKey: ['outline', projectId] })
         toast({ kind: 'success', title: '已重命名' })
       } catch (e) {
-        toast({ kind: 'error', title: '重命名失败', description: (e as Error).message })
+        showError(e, '重命名失败')
       }
     },
     [outlineData, prompt, qc, projectId, toast],
@@ -412,7 +432,7 @@ export function EditorPage() {
         qc.invalidateQueries({ queryKey: ['outline', projectId] })
         toast({ kind: 'success', title: '已重命名' })
       } catch (e) {
-        toast({ kind: 'error', title: '重命名失败', description: (e as Error).message })
+        showError(e, '重命名失败')
       }
     },
     [outlineData, prompt, qc, projectId, toast],
@@ -443,18 +463,19 @@ export function EditorPage() {
     })
 
   // Helper: read all scenes in a given chapter (by chapterId, not derived from current scene).
-  const getChapterContent = async (chapterId: number) => {
-    if (!outlineData) return null
-    const chapterScenes = outlineData.scenes.filter((s) => s.chapterId === chapterId)
-    let text = ''
-    const titles: { title: string; id: number }[] = []
-    for (const s of chapterScenes) {
-      const d = await api<{ markdown: string; title: string }>(`/api/scenes/${s.id}`)
-      text += `### ${d.title}\n\n${d.markdown}\n\n`
-      titles.push({ title: d.title, id: s.id })
+  // Uses the single batch endpoint `GET /api/chapters/:id/content` so a 20-scene
+  // chapter is one round-trip rather than 20 serial awaits.
+  const getChapterContent = useCallback(async (chapterId: number) => {
+    const dto = await outlineApi.chapterContent(chapterId)
+    if (dto.titles.length === 0) {
+      // Mirror the previous "no scenes" branch so downstream callers behave identically.
+      return { text: '', titles: [] as { title: string; id: number }[] }
     }
-    return { text, titles }
-  }
+    return {
+      text: dto.text,
+      titles: dto.titles.map((t) => ({ title: t.title, id: t.id })),
+    }
+  }, [])
 
   // Review/extract AI call. The targets (chapter scenes) are *snapshotted here* —
 // subsequent scene navigation does NOT change what the review is targeting, so
@@ -560,6 +581,51 @@ export function EditorPage() {
     [runReview],
   )
 
+  // Bundle all tree callbacks into one memoized object so the OutlineTree's
+  // memo engages. Without this, every keystroke in the editor (which
+  // re-renders EditorPage) would invalidate every callback prop identity
+  // and re-render the whole tree, blowing away collapsed/expanded state.
+  const outlineHandlers = useMemo<OutlineHandlers>(
+    () => ({
+      onSelectScene: setSceneId,
+      onSelectChapter: setSelectedChapterId,
+      onAddVolume: () => void addVolume.mutate(),
+      onAddChapter: (volumeId) => void addChapter.mutate(volumeId),
+      onAddScene: handleAddScene,
+      onCycleStatus: (id) => void cycleStatus.mutate(id),
+      onDeleteScene: handleDeleteScene,
+      onDeleteChapter: handleDeleteChapter,
+      onRenameScene: renameScene,
+      onRenameChapter: renameChapter,
+      onRenameVolume: renameVolume,
+      onReviewChapter: handleReviewChapter,
+      onExtractChapter: handleExtractChapter,
+    }),
+    [
+      addVolume,
+      addChapter,
+      handleAddScene,
+      cycleStatus,
+      handleDeleteScene,
+      handleDeleteChapter,
+      renameScene,
+      renameChapter,
+      renameVolume,
+      handleReviewChapter,
+      handleExtractChapter,
+    ],
+  )
+
+  // Memoize the outline tree so it isn't rebuilt on every EditorPage
+  // re-render (which fires on every keystroke in the editor). Without this,
+  // each keystroke runs buildTree's O(V+C+S) sort + filter and creates a new
+  // tree reference — combined with the OutlineTree memo, this lets the tree
+  // actually skip re-rendering when only `content` changes.
+  const outlineTree = useMemo(() => {
+    if (!outlineData) return null
+    return buildTree(outlineData.volumes, outlineData.chapters, outlineData.scenes)
+  }, [outlineData])
+
   // Apply a finalized AI text result to the project — shared between the
   // "accept" button in the AI panel and the recovery banner for interrupted
   // drafts. The `scenes` arg is only meaningful for `generate_chapter` mode
@@ -583,7 +649,7 @@ export function EditorPage() {
           qc.invalidateQueries({ queryKey: ['project', projectId] })
           toast({ kind: 'success', title: '故事弧线已保存到大纲笔记' })
         } catch (e) {
-          toast({ kind: 'error', title: '保存失败', description: (e as Error).message })
+          showError(e, '保存失败')
         }
         return
       }
@@ -604,7 +670,7 @@ export function EditorPage() {
           qc.invalidateQueries({ queryKey: ['characters', projectId] })
           toast({ kind: 'success', title: `语音档案已保存${matched > 0 ? `，匹配 ${matched} 个人物` : ''}` })
         } catch (e) {
-          toast({ kind: 'error', title: '保存失败', description: (e as Error).message })
+          showError(e, '保存失败')
         }
         return
       }
@@ -634,7 +700,7 @@ export function EditorPage() {
             })
           }
         } catch (e) {
-          toast({ kind: 'error', title: '创建场景失败', description: (e as Error).message })
+          showError(e, '创建场景失败')
         }
         return
       }
@@ -643,15 +709,26 @@ export function EditorPage() {
         if (mode === 'continue') {
           const merged = content.trimEnd() + '\n\n' + text
           editorApiRef.current.setContentFromText(merged)
-        } else if (scope === 'selection' && selectionText) {
-          const replaced = content.replace(selectionText, text)
-          editorApiRef.current.setContentFromText(replaced)
+        } else if (scope === 'selection') {
+          // Use ProseMirror positions instead of a string `content.replace`.
+          // The old code silently no-op'd if the user typed into the selection
+          // during streaming (the selection text no longer matched anywhere).
+          // The editor API method anchors to the live doc's from/to, so we
+          // always replace the current range.
+          const replaced = editorApiRef.current.replaceSelectionWithText(text)
+          if (!replaced) {
+            // No selection at accept time — fall back to overwriting the whole
+            // doc so the user at least sees the AI output somewhere.
+            editorApiRef.current.setContentFromText(text)
+          }
         } else {
           editorApiRef.current.setContentFromText(text)
         }
       } else if (mode === 'continue') {
         setContent((c) => c.trimEnd() + '\n\n' + text)
       } else if (scope === 'selection' && selectionText) {
+        // Fallback path when the editor isn't ready (e.g. SSR or before mount).
+        // Same as before: if the selection text drifted, this silently no-ops.
         setContent((c) => c.replace(selectionText, text))
       } else {
         setContent(text)
@@ -678,6 +755,9 @@ export function EditorPage() {
           // change what gets rewritten.
           let applied = 0
           const total = reviewTargets.length
+          // Collect per-scene failures so the user can see which scenes
+          // didn't apply instead of a single opaque "applied to N" toast.
+          const failures: Array<{ title: string; error: string }> = []
           for (let i = 0; i < total; i++) {
             const sc = reviewTargets[i]!
             setApplyProgress({ current: i + 1, total, sceneTitle: sc.title })
@@ -705,13 +785,27 @@ ${sceneText}`
               })
               applied++
             } catch (e) {
-              console.error(`Failed to apply review to scene ${sc.title}:`, e)
+              const err = e instanceof ApiClientError ? e : (e as Error)
+              console.error(`[审稿应用] 场景 ${sc.title} 失败:`, err)
+              failures.push({ title: sc.title, error: err.message })
             }
           }
           setApplyProgress(null)
           qc.invalidateQueries({ queryKey: ['outline', projectId] })
           if (sceneId) qc.invalidateQueries({ queryKey: ['scene', sceneId] })
-          toast({ kind: 'success', title: `审稿建议已应用到 ${applied} 个场景` })
+          if (failures.length === 0) {
+            toast({ kind: 'success', title: `审稿建议已应用到 ${applied} 个场景` })
+          } else {
+            // Cap the visible list so a 20-scene failure doesn't blow up the toast.
+            const preview = failures.slice(0, 5).map((f) => `• ${f.title}: ${f.error}`).join('\n')
+            const more = failures.length > 5 ? `\n…等 ${failures.length - 5} 个` : ''
+            const tone = applied === 0 ? 'error' : 'info'
+            toast({
+              kind: tone,
+              title: `已应用 ${applied}/${total} 个场景,${failures.length} 个失败`,
+              description: preview + more,
+            })
+          }
         } else {
           // Extract: parse combined settings + voice result
           let savedCount = 0
@@ -924,7 +1018,7 @@ ${sceneText}`
           }
         }
       } catch (e) {
-        toast({ kind: 'error', title: '应用失败', description: (e as Error).message })
+        showError(e, '应用失败')
       } finally {
         setApplyLoading(false)
       }
@@ -989,7 +1083,7 @@ ${sceneText}`
                         qc.invalidateQueries({ queryKey: ['project', projectId] })
                         setEditingStoryArc(false)
                         toast({ kind: 'success', title: '已保存' })
-                      } catch (e) { toast({ kind: 'error', title: '保存失败', description: (e as Error).message }) }
+                      } catch (e) { showError(e, '保存失败') }
                     }}>
                       <Check className="mr-1 h-2.5 w-2.5" /> 保存
                     </Button>
@@ -999,24 +1093,12 @@ ${sceneText}`
                   </div>
                 </div>
               )}
-              {outlineData ? (
+              {outlineTree ? (
                 <OutlineTree
-                  nodes={buildTree(outlineData.volumes, outlineData.chapters, outlineData.scenes)}
+                  nodes={outlineTree}
                   currentSceneId={sceneId}
                   selectedChapterId={selectedChapterId ?? undefined}
-                  onSelectScene={setSceneId}
-                  onSelectChapter={setSelectedChapterId}
-                  onAddVolume={() => addVolume.mutate()}
-                  onAddChapter={(volumeId) => addChapter.mutate(volumeId)}
-                  onAddScene={(chapterId) => handleAddScene(chapterId)}
-                  onCycleStatus={(id) => cycleStatus.mutate(id)}
-                  onDeleteScene={handleDeleteScene}
-                  onDeleteChapter={handleDeleteChapter}
-                  onRenameScene={(id) => renameScene(id)}
-                  onRenameChapter={(id) => renameChapter(id)}
-                  onRenameVolume={(id) => renameVolume(id)}
-                  onReviewChapter={handleReviewChapter}
-                  onExtractChapter={handleExtractChapter}
+                  handlers={outlineHandlers}
                 />
               ) : (
                 <div className="p-4 text-sm text-muted-foreground">读取大纲中…</div>

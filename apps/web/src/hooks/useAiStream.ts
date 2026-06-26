@@ -73,12 +73,14 @@ export function useAiStream() {
     setState((s) => ({ ...s, status: 'idle' as const }))
   }, [])
 
-  // Tick elapsedMs while streaming.
+  // Tick elapsedMs while streaming. Throttled to 500ms — the streamed text
+  // itself triggers re-renders on every delta (multiple Hz), so a faster
+  // elapsed-time tick only adds wasted React work without visible benefit.
   useEffect(() => {
     if (state.status !== 'streaming') return
     const t = setInterval(() => {
       setState((s) => ({ ...s, elapsedMs: Date.now() - startedAt.current }))
-    }, 200)
+    }, 500)
     return () => clearInterval(t)
   }, [state.status])
 

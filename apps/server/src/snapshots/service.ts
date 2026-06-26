@@ -16,6 +16,19 @@ export class SnapshotService {
     return hash
   }
 
+  /**
+   * Write the snapshot object file only — does NOT touch the DB. The caller
+   * is expected to insert the `snapshots_meta` row inside the surrounding
+   * DB transaction so that the file write and the meta row commit atomically.
+   *
+   * `parent_hash` for the new row should be computed by the caller (the
+   * previous-most-recent row for this scene), since that lookup should
+   * happen inside the same transaction.
+   */
+  async writeSnapshotOnly(text: string): Promise<string> {
+    return writeObject(snapshotsDir(this.projectDirAbs), text)
+  }
+
   async restoreScene(sceneId: number, hash: string): Promise<string> {
     const text = await readObject(snapshotsDir(this.projectDirAbs), hash)
     const row = this.db

@@ -2,7 +2,6 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { AppConfig, ProviderConfig, ProviderPublicInfo, AiProvider } from '@novel/shared'
 import { OpenAiCompatibleProvider } from './openai-compatible.js'
-import { FakeAiProvider } from './fake.js'
 
 export class ProviderRegistry {
   private cfg: AppConfig = { providers: [], defaultProviderId: null }
@@ -36,10 +35,18 @@ export class ProviderRegistry {
     return id ? this.getConfig(id) : undefined
   }
 
+  /**
+   * Resolve a provider by id (or the default if `id` is omitted).
+   * Throws `no_provider` if no config exists — callers are expected to gate
+   * on `getDefaultConfig()?.id` before invoking. This used to fall back to
+   * a `FakeAiProvider`, but that branch was unreachable in practice (the
+   * `/api/ai/complete` route already throws 409 when no provider is configured),
+   * so the fallback was removed.
+   */
   getProvider(id?: string): AiProvider {
     const cfg = id ? this.getConfig(id) : this.getDefaultConfig()
-    if (cfg) return new OpenAiCompatibleProvider(cfg)
-    return new FakeAiProvider()
+    if (!cfg) throw new Error('no_provider')
+    return new OpenAiCompatibleProvider(cfg)
   }
 
   /** Return full provider config (with apiKey masked) for the settings UI */

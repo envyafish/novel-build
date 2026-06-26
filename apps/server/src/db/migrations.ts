@@ -193,4 +193,34 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
     id: 9,
     sql: `ALTER TABLE chapters ADD COLUMN summary TEXT NOT NULL DEFAULT '';`,
   },
+  {
+    // Drop the unused `ai_drafts` table and its indexes. The original intent
+    // was to persist in-progress AI output every ~200ms for crash recovery,
+    // but the write path was removed (see `useAiStream.ts` header comment)
+    // while the table + two indexes were left behind. Keeping them costs
+    // index maintenance on every INSERT into other tables that the migration
+    // runner touches, and the empty schema misleads future readers.
+    // The associated indexes `idx_ai_drafts_scene` and `idx_ai_drafts_expires`
+    // are dropped automatically with the table.
+    id: 10,
+    sql: `DROP TABLE IF EXISTS ai_drafts;`,
+  },
+  {
+    // Add indexes for queries that are hot in the AI hot path (the world /
+    // outline summarizers fire on every AI request) and in `getOutline`
+    // (called by the outline tab, the scene detail endpoint, and the new
+    // `GET /api/chapters/:id/content` endpoint). Without these, every
+    // call was a full table scan + in-memory sort.
+    id: 11,
+    sql: `
+      CREATE INDEX idx_scenes_chapter_order ON scenes(chapter_id, order_index);
+      CREATE INDEX idx_chapters_volume_order ON chapters(volume_id, order_index);
+      CREATE INDEX idx_snapshots_meta_scene_created ON snapshots_meta(scene_id, created_at DESC);
+      CREATE INDEX idx_characters_project ON characters(project_id);
+      CREATE INDEX idx_world_elements_project_category ON world_elements(project_id, category);
+      CREATE INDEX idx_timeline_events_project_order ON timeline_events(project_id, order_index);
+      CREATE INDEX idx_foreshadows_project_status ON foreshadows(project_id, status);
+      CREATE INDEX idx_conflicts_project_status ON conflicts(project_id, status);
+    `,
+  },
 ]

@@ -15,6 +15,9 @@
  *
  * Also exports `stripThinking` for defense-in-depth against reasoning models
  * that leak `<think>...</think>`-style blocks into the streamed content.
+ *
+ * Used by both web (`apps/web`) and server (`apps/server`) — kept here so the
+ * two sides cannot drift in how they interpret AI output.
  */
 
 export function stripThinking(text: string): string {

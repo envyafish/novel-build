@@ -117,7 +117,11 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
     reply.raw.on('close', () => { aborted = true })
     reply.raw.write(JSON.stringify({ maxOutputTokens: ctx.modelMaxTokens ?? 0 }) + '\n')
     try {
-      await limiter.acquire()
+      // 90s queue timeout: if the upstream provider hangs and two streams are
+      // already in flight, the third request fails fast instead of blocking
+      // the request forever. Tunable via env so we can adjust without code changes.
+      const timeoutMs = Number(process.env.AI_QUEUE_TIMEOUT_MS ?? 90000)
+      await limiter.acquire(undefined, { timeoutMs })
       try {
         const bridge = new AbortController()
         reply.raw.on('close', () => bridge.abort())
