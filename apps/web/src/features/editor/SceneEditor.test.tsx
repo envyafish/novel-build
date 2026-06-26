@@ -9,15 +9,6 @@ describe('SceneEditor', () => {
     expect(screen.getByRole('textbox')).toBeInTheDocument()
   })
 
-  it('Tab triggers onAcceptSuggestion', () => {
-    const onAccept = vi.fn()
-    render(<SceneEditor initialMarkdown="hi" onChangeMarkdown={() => {}} onAcceptSuggestion={onAccept} />)
-    const el = screen.getByRole('textbox') as HTMLElement
-    el.focus()
-    fireEvent.keyDown(el, { key: 'Tab' })
-    expect(onAccept).toHaveBeenCalled()
-  })
-
   it('Cmd+S triggers onForceSave', () => {
     const onSave = vi.fn()
     render(<SceneEditor initialMarkdown="hi" onChangeMarkdown={() => {}} onForceSave={onSave} />)

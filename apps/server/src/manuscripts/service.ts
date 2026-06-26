@@ -5,7 +5,7 @@ import { manuscriptPath, projectDir } from '../projects/paths.js'
 import { apiError } from '../errors.js'
 import { SnapshotService } from '../snapshots/service.js'
 
-export interface SaveSceneInput {
+interface SaveSceneInput {
   sceneId: number
   markdown: string
   baseHash: string

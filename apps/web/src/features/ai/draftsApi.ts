@@ -1,6 +1,6 @@
 import { api } from '../../api/client.js'
 
-export type DraftStatus = 'streaming' | 'done' | 'error' | 'aborted'
+type DraftStatus = 'streaming' | 'done' | 'error' | 'aborted'
 
 export interface DraftDto {
   id: string
@@ -18,7 +18,7 @@ export interface DraftDto {
   expiresAt: string
 }
 
-export interface CreateDraftInput {
+interface CreateDraftInput {
   projectId: number
   sceneId?: number | null
   mode: string

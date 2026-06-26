@@ -41,7 +41,4 @@ export const worldApi = {
   updateConflict: (id: number, data: Partial<ConflictDto>) =>
     api<ConflictDto>(`/api/conflicts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteConflict: (id: number) => api<{ ok: true }>(`/api/conflicts/${id}`, { method: 'DELETE' }),
-
-  // Summary
-  getSummary: (projectId: number) => api<{ summary: string; counts: { characters: number; worldElements: number; timeline: number; foreshadows: number; conflicts: number } }>(`/api/projects/${projectId}/world-summary`),
 }

@@ -20,7 +20,7 @@ export interface DraftRow {
   expires_at: string
 }
 
-export interface CreateDraftInput {
+interface CreateDraftInput {
   projectId: number
   sceneId?: number | null
   mode: string

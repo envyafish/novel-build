@@ -54,7 +54,7 @@ export interface SnapshotMetaDto {
   parentHash: string | null
 }
 
-export interface DiffLine {
+interface DiffLine {
   kind: 'eq' | 'add' | 'del'
   text: string
 }

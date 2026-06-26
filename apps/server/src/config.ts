@@ -1,7 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 
-export interface ServerConfig {
+interface ServerConfig {
   novelsDir: string
   appConfigPath: string
   logsDir: string

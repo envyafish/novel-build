@@ -1,6 +1,6 @@
 import type { AiProvider, CompletionRequest } from '@novel/shared'
 
-export interface FakeOptions {
+interface FakeOptions {
   chunkSize?: number
   delayMs?: number
   errorAfter?: Error

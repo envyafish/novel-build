@@ -14,14 +14,14 @@ const { DatabaseSync, StatementSync } = sqliteModule
 type DatabaseSyncType = typeof DatabaseSync.prototype
 type StatementSyncType = typeof StatementSync.prototype
 
-export type BindParams = ReadonlyArray<unknown> | Record<string, unknown>
+type BindParams = ReadonlyArray<unknown> | Record<string, unknown>
 
-export interface RunResult {
+interface RunResult {
   lastInsertRowid: number | bigint
   changes: number
 }
 
-export class PreparedStatement<R = unknown> {
+class PreparedStatement<R = unknown> {
   constructor(private stmt: StatementSyncType) {}
   all(...params: unknown[]): R[] {
     const rows = this.stmt.all(...(params as never[])) as R[]

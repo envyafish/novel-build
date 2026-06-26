@@ -11,8 +11,6 @@ interface Props {
   initialMarkdown: string
   onChangeMarkdown: (md: string) => void
   onSelectionText?: ((text: string | null) => void) | undefined
-  onAcceptSuggestion?: (() => void) | undefined
-  onRejectSuggestion?: (() => void) | undefined
   onForceSave?: (() => void) | undefined
   placeholder?: string | undefined
   onEditorReady?: ((api: { setContentFromText: (text: string) => void }) => void) | undefined
@@ -24,8 +22,6 @@ export function SceneEditor({
   initialMarkdown,
   onChangeMarkdown,
   onSelectionText,
-  onAcceptSuggestion,
-  onRejectSuggestion,
   onForceSave,
   placeholder = '开始写…',
   onEditorReady,
@@ -46,14 +42,6 @@ export function SceneEditor({
     },
     editorProps: {
       handleKeyDown(_view, event) {
-        if (event.key === 'Tab' && onAcceptSuggestion) {
-          onAcceptSuggestion()
-          return true
-        }
-        if (event.key === 'Escape' && onRejectSuggestion) {
-          onRejectSuggestion()
-          return true
-        }
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
           onForceSave?.()
           event.preventDefault()

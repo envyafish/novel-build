@@ -1,5 +1,5 @@
 import { api } from '../../api/client.js'
-import type { ProviderInfoDto, AiSettingsDto } from '@novel/shared'
+import type { AiSettingsDto } from '@novel/shared'
 
 export interface ProviderFullInfo {
   id: string

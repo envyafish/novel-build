@@ -37,32 +37,3 @@ export function formatAiOutput(text: string): string {
 
   return s
 }
-
-/**
- * Merge AI-generated text with existing editor content.
- * - If the editor is empty, just insert the generated text.
- * - If appending (continue), ensure proper paragraph separation.
- * - If replacing (rewrite/polish/expand/condense), the caller handles replacement.
- */
-export function mergeWithExisting(existing: string, generated: string, mode: string): string {
-  const formatted = formatAiOutput(generated)
-
-  if (!existing.trim()) {
-    return formatted
-  }
-
-  if (mode === 'continue') {
-    // Ensure there's a paragraph break between existing and new text
-    const trimmed = existing.trimEnd()
-    return trimmed + '\n\n' + formatted
-  }
-
-  // For generate modes, replace the entire content
-  if (mode === 'generate_scene' || mode === 'generate_chapter') {
-    return formatted
-  }
-
-  // For edit modes (polish, rewrite, expand, condense), return just the formatted text
-  // The caller will handle the replacement
-  return formatted
-}
