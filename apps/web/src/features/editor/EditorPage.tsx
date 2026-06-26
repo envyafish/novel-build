@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Sparkles, FilePlus, BookPlus, Settings as SettingsIcon, Focus as FocusIcon, Camera, BookOpen, Check, ChevronDown, RotateCcw, Trash2, Pencil } from 'lucide-react'
+import { Sparkles, FilePlus, BookPlus, Settings as SettingsIcon, Focus as FocusIcon, Camera, BookOpen, Check, ChevronDown, RotateCcw, Pencil, X } from 'lucide-react'
 import { api, ApiClientError } from '../../api/client.js'
 import type { SceneDetailDto, AiSettingsDto, EntityStatus, ProjectDto, WorldCategory, ConflictType, ForeshadowStatus, CompletionMode } from '@novel/shared'
 import { SceneEditor } from './SceneEditor.js'
@@ -17,7 +17,6 @@ import { formatAiOutput } from '../ai/format.js'
 import { type ParsedScene } from '../ai/sceneSplitter.js'
 import { parseAiJson } from '../ai/jsonParse.js'
 import { runAiCompletion } from '../ai/runAi.js'
-import { draftsApi, type DraftDto } from '../ai/draftsApi.js'
 import { applyGeneratedScenes } from '../ai/sceneBatchCreate.js'
 import { useAiStream } from '../../hooks/useAiStream.js'
 import { StoryArcGenerator } from './StoryArcGenerator.js'
@@ -44,9 +43,8 @@ export function EditorPage() {
   const [storyArcOpen, setStoryArcOpen] = useState(false)
   const [editingStoryArc, setEditingStoryArc] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
-  const [recoverDraft, setRecoverDraft] = useState<DraftDto | undefined>(undefined)
   // AI stream state lives in EditorPage so it persists across panel open/close.
-  const { state: aiState, start: aiStart, cancel: aiCancel, reset: aiReset, accept: aiAccept } = useAiStream({ persist: true })
+  const { state: aiState, start: aiStart, cancel: aiCancel, reset: aiReset, accept: aiAccept } = useAiStream()
   const [reviewOpen, setReviewOpen] = useState(false)
   const [reviewText, setReviewText] = useState('')
   const [reviewLoading, setReviewLoading] = useState(false)
@@ -89,13 +87,6 @@ export function EditorPage() {
       setContent(scene.data.markdown)
       setBaseHash(scene.data.contentHash)
       setSaveState('idle')
-      // Check for any in-flight AI drafts when switching to a new scene.
-      void draftsApi.listByScene(scene.data.id).then((drafts: DraftDto[]) => {
-        const inflight = drafts.find((d: DraftDto) => d.status === 'streaming')
-        setRecoverDraft(inflight)
-      }).catch(() => setRecoverDraft(undefined))
-    } else {
-      setRecoverDraft(undefined)
     }
   }, [scene.data?.id])
 
@@ -104,6 +95,21 @@ export function EditorPage() {
   // re-binding on every render.
   const focusModeRef = useRef(false)
   focusModeRef.current = focusMode
+
+  /**
+   * AbortController for the review/extract request. We keep it on a ref so
+   * the user can cancel an in-flight run (the panel renders a "取消" button
+   * while loading) and so we can tear it down when the panel closes.
+   *
+   * The `reviewBlock` flag is the "blocking" state — while true, the rest of
+   * the page (outline sidebar, top bar, AI sidebar) is rendered inert via a
+   * non-interactive overlay so the user can't start a second review/extract
+   * or navigate away from the chapter being processed. They can still close
+   * the panel by clicking the X or hitting the cancel button, both of which
+   * abort the request.
+   */
+  const reviewAbortRef = useRef<AbortController | null>(null)
+  const [reviewBlock, setReviewBlock] = useState(false)
 
   // Reset the AI sidebar's stream when the user switches to a different scene —
   // otherwise the panel would keep showing the previous scene's generated text
@@ -426,13 +432,14 @@ export function EditorPage() {
   // Helper: run AI fetch. `sceneId` is optional — server uses projectId for
   // ai_settings lookup and only needs sceneId for modes that pull scene-
   // specific context (continue/polish/rewrite on the current scene).
-  const runAiFetch = (mode: string, inputText: string, opts?: { sceneId?: number }) =>
+  const runAiFetch = (mode: string, inputText: string, opts?: { sceneId?: number; signal?: AbortSignal }) =>
     runAiCompletion({
       projectId,
       ...(opts?.sceneId !== undefined ? { sceneId: opts.sceneId } : sceneId !== undefined ? { sceneId } : {}),
       mode,
       model: settings.data?.model ?? 'gpt-4o-mini',
       inputText,
+      ...(opts?.signal ? { signal: opts.signal } : {}),
     })
 
   // Helper: read all scenes in a given chapter (by chapterId, not derived from current scene).
@@ -456,7 +463,15 @@ export function EditorPage() {
 // outline sidebar, against an explicit chapterId.
   const runReview = useCallback(
     async (kind: 'review' | 'extract', chapterId: number) => {
+      // Tear down any in-flight request before starting a new one. The page
+      // is blocked from other interactions while reviewBlock is true (the
+      // panel sits in the middle and dims the rest of the layout), so the
+      // user can't accidentally fire two concurrent review/extract runs.
+      reviewAbortRef.current?.abort()
+      const ctrl = new AbortController()
+      reviewAbortRef.current = ctrl
       setReviewOpen(true)
+      setReviewBlock(true)
       setReviewLoading(true)
       setReviewText('')
       setReviewKind(kind)
@@ -468,30 +483,56 @@ export function EditorPage() {
           toast({ kind: 'info', title: '该章节暂无内容', description: '请先在该章节下创建并填充场景。' })
           setReviewLoading(false)
           setReviewOpen(false)
+          setReviewBlock(false)
+          reviewAbortRef.current = null
           return
         }
         setReviewTargets(ch.titles)
         if (kind === 'review') {
           // Chapter-level review/extract: don't pass sceneId — server uses
           // projectId from the body for ai_settings, no scene JOIN needed.
-          const text = await runAiFetch('auto_review', ch.text)
+          const text = await runAiFetch('auto_review', ch.text, { signal: ctrl.signal })
           setReviewText(text)
         } else {
           // Extract: run consistency_check only. The `voice` slot is kept in
           // the wrapper for backward compat with the parser below, but no
           // longer triggers a separate AI call — voice profiles are now
           // returned inside the consistency_check JSON as `voiceProfile`.
-          const settingsText = await runAiFetch('consistency_check', ch.text)
+          const settingsText = await runAiFetch('consistency_check', ch.text, { signal: ctrl.signal })
           setReviewText(JSON.stringify({ settings: settingsText, voice: '' }))
         }
       } catch (e) {
-        setReviewText('错误: ' + (e as Error).message)
+        if ((e as Error).name === 'AbortError') {
+          // User cancelled mid-stream — drop the partial text and don't
+          // surface it as an error.
+          setReviewText('')
+        } else {
+          setReviewText('错误: ' + (e as Error).message)
+        }
       } finally {
         setReviewLoading(false)
+        // Loading is done — switch from "blocked" to "result ready" mode.
+        // The panel stays open so the user can read the output and choose to
+        // apply, but the blocking overlay lifts so the rest of the page is
+        // interactive again.
+        setReviewBlock(false)
+        reviewAbortRef.current = null
       }
     },
     [runAiFetch, getChapterContent, toast],
   )
+
+  // Cancel an in-flight review/extract. Aborts the underlying fetch so the
+  // server stops streaming; the panel closes and the blocking overlay lifts.
+  const cancelReview = useCallback(() => {
+    reviewAbortRef.current?.abort()
+    reviewAbortRef.current = null
+    setReviewOpen(false)
+    setReviewBlock(false)
+    setReviewLoading(false)
+    setReviewText('')
+    setApplyProgress(null)
+  }, [])
 
   // Auto-track which chapter is "selected" based on the currently-open scene.
   // This lets chapter-level buttons work without forcing the user to click a
@@ -1097,184 +1138,139 @@ ${sceneText}`
             />
           )}
 
-          {/* Review panel — lives OUTSIDE {sceneId &&} so chapter-level
+          {/* Blocking overlay: sits on top of everything except the review/extract
+              panel itself (which has its own z-50 above this z-40) and dims
+              the rest of the page while a review/extract request is in
+              flight. The overlay is click-through (pointer-events-none) — it
+              doesn't intercept input, it just visually communicates "wait,
+              something is happening" — but the panel's cancel button still
+              aborts the underlying request. */}
+          {reviewBlock && (
+            <div
+              className="pointer-events-none fixed inset-0 z-40 bg-background/70 backdrop-blur-sm"
+              aria-hidden="true"
+            />
+          )}
+
+          {/* Review/extract panel — lives OUTSIDE {sceneId &&} so chapter-level
               review/extract (triggered from the outline sidebar) works even
-              when the user hasn't opened any scene. */}
+              when the user hasn't opened any scene. Now rendered as a
+              centered modal-like card with a larger surface so the long
+              markdown output is readable. The blocking overlay above keeps
+              the user from accidentally starting a second run or navigating
+              away while the request is in flight. */}
           {reviewOpen && (
-            <div className="fixed bottom-24 right-6 z-40 w-80 max-h-96 overflow-hidden rounded-xl border bg-background shadow-2xl">
-              <div className="flex items-center justify-between border-b px-3 py-2">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-semibold text-foreground">
-                    {reviewKind === 'review' ? '📖 审稿建议' : '🔍 设定提取'}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-                  onClick={() => { setReviewOpen(false); setApplyProgress(null) }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
-                </button>
-              </div>
-              <div className="max-h-64 overflow-y-auto p-3">
-                {reviewLoading ? (
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                    AI 正在分析…
-                  </div>
-                ) : reviewKind === 'extract' ? (
-                  <div className="space-y-3">
-                    {(() => {
-                      try {
-                        const combined = JSON.parse(reviewText)
-                        return (
-                          <>
-                            {combined.settings && (
-                              <div>
-                                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">设定提取</div>
-                                <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{combined.settings}</pre>
-                              </div>
-                            )}
-                            {combined.voice && (
-                              <div>
-                                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">语音档案</div>
-                                <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{combined.voice}</pre>
-                              </div>
-                            )}
-                          </>
-                        )
-                      } catch {
-                        return <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{reviewText}</pre>
-                      }
-                    })()}
-                  </div>
-                ) : (
-                  <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{reviewText}</pre>
-                )}
-              </div>
-              {!reviewLoading && reviewText && (
-                <div className="flex flex-col gap-2 border-t px-3 py-2">
-                  {/* Progress bar when applying chapter review */}
-                  {applyProgress && (
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                        <span className="flex items-center gap-1.5">
-                          <div className="h-2 w-2 animate-spin rounded-full border border-primary border-t-transparent" />
-                          正在重写: {applyProgress.sceneTitle}
-                        </span>
-                        <span className="font-mono tabular-nums">{applyProgress.current}/{applyProgress.total}</span>
-                      </div>
-                      <div className="h-1 w-full overflow-hidden rounded-full bg-background">
-                        <div
-                          className="h-full bg-primary transition-all duration-300"
-                          style={{ width: `${(applyProgress.current / applyProgress.total) * 100}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  <div className="flex gap-2">
-                    {reviewKind === 'review' ? (
-                      <Button
-                        size="sm"
-                        className="flex-1 text-xs"
-                        disabled={applyLoading}
-                        onClick={() => applyReview('replace_all')}
-                      >
-                        <Check className="mr-1 h-3 w-3" />
-                        {applyLoading ? '应用中...' : `应用到整个章节 (${reviewTargets.length} 个场景)`}
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        className="flex-1 text-xs"
-                        disabled={applyLoading}
-                        onClick={() => applyReview('extract')}
-                      >
-                        <Check className="mr-1 h-3 w-3" />
-                        保存到设定
-                      </Button>
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border bg-background shadow-2xl">
+                <div className="flex items-center justify-between border-b px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-foreground">
+                      {reviewKind === 'review' ? '📖 审稿建议' : '🔍 设定提取'}
+                    </span>
+                    {reviewTargets.length > 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        章节：{reviewTargets.length} 个场景
+                      </span>
                     )}
                   </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={cancelReview}
+                  >
+                    <X className="mr-1 h-3.5 w-3.5" />
+                    {reviewLoading ? '取消' : '关闭'}
+                  </Button>
                 </div>
-              )}
+                <div className="flex-1 overflow-y-auto p-4">
+                  {reviewLoading ? (
+                    <div className="flex flex-col items-center justify-center gap-3 py-16 text-sm text-muted-foreground">
+                      <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                      <span>AI 正在分析章节内容…</span>
+                      <span className="text-xs">点「取消」可随时中断</span>
+                    </div>
+                  ) : reviewKind === 'extract' ? (
+                    <div className="space-y-4">
+                      {(() => {
+                        try {
+                          const combined = JSON.parse(reviewText)
+                          return (
+                            <>
+                              {combined.settings && (
+                                <div>
+                                  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">设定提取</div>
+                                  <pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-sm leading-relaxed text-foreground">{combined.settings}</pre>
+                                </div>
+                              )}
+                              {combined.voice && (
+                                <div>
+                                  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">语音档案</div>
+                                  <pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-sm leading-relaxed text-foreground">{combined.voice}</pre>
+                                </div>
+                              )}
+                            </>
+                          )
+                        } catch {
+                          return <pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-sm leading-relaxed text-foreground">{reviewText}</pre>
+                        }
+                      })()}
+                    </div>
+                  ) : (
+                    <pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-sm leading-relaxed text-foreground">{reviewText}</pre>
+                  )}
+                </div>
+                {!reviewLoading && reviewText && (
+                  <div className="flex flex-col gap-3 border-t px-4 py-3">
+                    {/* Progress bar when applying chapter review */}
+                    {applyProgress && (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span className="flex items-center gap-1.5">
+                            <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                            正在重写: {applyProgress.sceneTitle}
+                          </span>
+                          <span className="font-mono tabular-nums">{applyProgress.current}/{applyProgress.total}</span>
+                        </div>
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-background">
+                          <div
+                            className="h-full bg-primary transition-all duration-300"
+                            style={{ width: `${(applyProgress.current / applyProgress.total) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex justify-end gap-2">
+                      {reviewKind === 'review' ? (
+                        <Button
+                          size="sm"
+                          className="text-xs"
+                          disabled={applyLoading}
+                          onClick={() => applyReview('replace_all')}
+                        >
+                          <Check className="mr-1.5 h-3.5 w-3.5" />
+                          {applyLoading ? '应用中...' : `应用到整个章节 (${reviewTargets.length} 个场景)`}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className="text-xs"
+                          disabled={applyLoading}
+                          onClick={() => applyReview('extract')}
+                        >
+                          <Check className="mr-1.5 h-3.5 w-3.5" />
+                          保存到设定
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
           {sceneId && (
             <>
-              {/* Show recovery panel if there's an in-flight draft for this scene.
-              Lets the user read the already-generated text, accept it (applies
-              via the same code path as the AI sidebar's accept button), or
-              discard it. The AI sidebar is always visible alongside. */}
-              {recoverDraft && (
-                <div className="fixed bottom-24 right-6 z-40 flex w-[28rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border bg-background shadow-2xl">
-                  <div className="flex items-center gap-2 border-b px-3 py-2 text-xs">
-                    <div className="h-2 w-2 animate-pulse rounded-full bg-primary" />
-                    <span className="font-semibold text-foreground">AI 生成中断</span>
-                    <span className="flex-1 truncate text-muted-foreground">
-                      {recoverDraft.mode === 'continue' ? '续写' :
-                       recoverDraft.mode === 'polish' ? '润色' :
-                       recoverDraft.mode === 'rewrite' ? '重写' :
-                       recoverDraft.mode === 'expand' ? '扩写' :
-                       recoverDraft.mode === 'condense' ? '压缩' :
-                       recoverDraft.mode === 'generate_chapter' ? '生成章节' :
-                       recoverDraft.mode === 'generate_scene' ? '生成场景' :
-                       recoverDraft.mode === 'consistency_check' ? '一致性检查' :
-                       recoverDraft.mode === 'auto_review' ? '审稿' :
-                       recoverDraft.mode === 'plan_story_arc' ? '故事弧线' :
-                       recoverDraft.mode === 'analyze_voice' ? '语音档案' :
-                       recoverDraft.mode}
-                    </span>
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono tabular-nums text-muted-foreground">
-                      {recoverDraft.status === 'streaming' ? '中断' : recoverDraft.status}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setRecoverDraft(undefined)}
-                      className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-                      title="关闭（保留草稿，下次回来还能恢复）"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
-                    </button>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto px-3 py-2 text-xs leading-relaxed">
-                    {recoverDraft.text ? (
-                      <pre className="whitespace-pre-wrap font-sans text-foreground">{recoverDraft.text}</pre>
-                    ) : (
-                      <div className="text-muted-foreground">（还没有生成任何文本）</div>
-                    )}
-                  </div>
-                  <div className="flex gap-2 border-t px-3 py-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-xs"
-                      onClick={async () => {
-                        await draftsApi.remove(recoverDraft.id)
-                        setRecoverDraft(undefined)
-                      }}
-                    >
-                      <Trash2 className="mr-1 h-3 w-3" /> 丢弃
-                    </Button>
-                    <Button
-                      size="sm"
-                      className="flex-1 text-xs"
-                      disabled={!recoverDraft.text}
-                      onClick={async () => {
-                        const mode = recoverDraft.mode as CompletionMode
-                        await applyAcceptedText(recoverDraft.text, mode)
-                        await draftsApi.remove(recoverDraft.id).catch(() => {})
-                        setRecoverDraft(undefined)
-                        if (mode !== 'plan_story_arc' && mode !== 'analyze_voice' && mode !== 'generate_chapter') {
-                          toast({ kind: 'success', title: '已接受已生成内容' })
-                        }
-                      }}
-                    >
-                      <Check className="mr-1 h-3 w-3" /> 接受（{recoverDraft.text.length} 字）
-                    </Button>
-                  </div>
-                </div>
-              )}
             </>
           )}
         </main>

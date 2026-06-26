@@ -3,7 +3,11 @@
     "allow": [
       "Bash(pnpm exec *)",
       "Bash(pnpm typecheck *)",
-      "Bash(node --experimental-vm-modules ./node_modules/vitest/vitest.mjs run)"
+      "Bash(node --experimental-vm-modules ./node_modules/vitest/vitest.mjs run)",
+      "Bash(git add *)",
+      "Bash(git commit -m '修复：删除审稿/提取面板的 localStorage 持久化 *)",
+      "Bash(pnpm test *)",
+      "Bash(git commit -m '修复：移除 AI 流的中断持久化与恢复功能 *)"
     ]
   }
 }
