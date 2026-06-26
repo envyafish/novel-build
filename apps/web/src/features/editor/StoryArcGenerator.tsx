@@ -106,6 +106,14 @@ export function StoryArcGenerator({ open, onOpenChange, projectId, model }: Prop
   }
 
   const handleClose = () => {
+    // While AI is streaming, treat close as a cancel — abort the fetch,
+    // drop the partial output, and reset local state. Without this the
+    // user could close the dialog mid-stream and the next time they open
+    // it the partially-streamed text would be visible again from the
+    // hook's stale state.
+    if (state.status === 'streaming') {
+      void cancel()
+    }
     onOpenChange(false)
     reset()
     setEditMode(false)
@@ -120,6 +128,13 @@ export function StoryArcGenerator({ open, onOpenChange, projectId, model }: Prop
     }
   }, [editMode, editedText, state.text])
 
+  // "Busy" covers both the AI generation stream AND the PATCH call that
+  // saves the result. While busy, the user can't close the dialog via
+  // outside click / Esc — they have to either cancel the stream or wait
+  // for the save to complete. This mirrors the same pattern as
+  // GenerateScenesDialog.
+  const busy = state.status === 'streaming' || saving
+
   // View selection
   const showInputForm = !editMode && state.status !== 'streaming' && state.status !== 'done' && state.status !== 'error'
   const showStreaming = !editMode && state.status === 'streaming'
@@ -128,8 +143,24 @@ export function StoryArcGenerator({ open, onOpenChange, projectId, model }: Prop
   const showEditMode = editMode
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (o || !busy) {
+          if (!o) handleClose()
+          else onOpenChange(true)
+        }
+      }}
+    >
+      <DialogContent
+        className="max-w-lg max-h-[80vh] overflow-y-auto"
+        onInteractOutside={(e) => {
+          if (busy) e.preventDefault()
+        }}
+        onEscapeKeyDown={(e) => {
+          if (busy) e.preventDefault()
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />

@@ -179,15 +179,55 @@ export function GenerateScenesDialog({
   }
 
   const handleClose = () => {
+    // While the stream is running, treat "close" as a cancel — abort the
+    // fetch, throw away the partial text, and snap back to the input step
+    // so the dialog is in a known-good state if the user re-opens it.
+    // (We don't actually pop the dialog here — that's `onOpenChange`'s job.
+    // This is only the body of the close, called from the X / overlay click.)
     if (step === 'generating') {
       void cancel()
+      streamReady.current = false
+      setStep('input')
+      reset()
     }
     onOpenChange(false)
   }
 
+  /**
+   * While a generate or apply is in flight, lock the rest of the page so
+   * the user can't fire a second request, navigate to a different scene,
+   * or otherwise start work that would race with the in-progress one. The
+   * dialog itself stays interactive (cancel/apply buttons must keep
+   * working) — only the rest of the page is dimmed.
+   */
+  const busy = step === 'generating' || applyLoading
+
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose() }}>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        // Block closing the dialog via overlay click / Esc while a stream is
+        // in flight or while we're applying the batch — the user has to
+        // explicitly cancel the stream (or wait for apply to finish) before
+        // they can dismiss. This prevents the "click away and lose state"
+        // footgun.
+        if (o || !busy) {
+          if (!o) handleClose()
+          else onOpenChange(true)
+        }
+      }}
+    >
+      <DialogContent
+        className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col"
+        onInteractOutside={(e) => {
+          // Same as the `onOpenChange` guard: don't let the user click
+          // outside to dismiss during a run.
+          if (busy) e.preventDefault()
+        }}
+        onEscapeKeyDown={(e) => {
+          if (busy) e.preventDefault()
+        }}
+      >
         {step === 'input' && (
           <>
             <DialogHeader>
