@@ -11,10 +11,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
-import { Sparkles, X, RotateCcw, Check, FileText, ChevronDown } from 'lucide-react'
+import { Sparkles, X, RotateCcw, Check, FileText, ChevronDown, Database } from 'lucide-react'
 import { useAiStream } from '../../hooks/useAiStream.js'
 import { splitChapterToScenes, type ParsedScene } from './sceneSplitter.js'
 import { applyGeneratedScenes } from './sceneBatchCreate.js'
+import { parseAiJson } from './jsonParse.js'
+import { worldApi } from '../world/api.js'
+import { runAiCompletion } from './runAi.js'
 import type { QueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 
@@ -34,9 +37,28 @@ interface GenerateScenesDialogProps {
   /**
    * Called after the user clicks Apply. Receives the id of the first
    * successfully created scene (so the editor can navigate to it), the
-   * list of created ids, and the list of failed titles.
+   * list of created ids, the list of failed titles, and an optional
+   * `extractSummary` describing the result of a follow-up world-DB
+   * extraction (only set when the user checked "应用并提取设定").
    */
-  onApplied: (result: { firstId: number; createdIds: number[]; failedTitles: string[] }) => void
+  onApplied: (result: {
+    firstId: number
+    createdIds: number[]
+    failedTitles: string[]
+    extractSummary?: WorldExtractSummary
+  }) => void
+}
+
+/**
+ * Counts of how many world-DB entities were created (or updated) by a
+ * `consistency_check` extraction. Used by EditorPage to render a toast.
+ */
+export interface WorldExtractSummary {
+  characters: number
+  worldElements: number
+  timeline: number
+  foreshadows: number
+  conflicts: number
 }
 
 const MIN_COUNT = 1
@@ -74,6 +96,13 @@ export function GenerateScenesDialog({
   // The description is still optional even when expanded.
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [applyLoading, setApplyLoading] = useState(false)
+  // When the user checks "应用并提取设定", we kick off a follow-up
+  // `consistency_check` AI call after the scenes are created and write any
+  // extracted characters / world elements / timeline / foreshadows /
+  // conflicts into the world DB. The user explicitly opted in via the
+  // checkbox — we never extract silently.
+  const [alsoExtract, setAlsoExtract] = useState(false)
+  const [extractLoading, setExtractLoading] = useState(false)
   // Persisted scene list across re-renders (e.g. cancel + reopen shouldn't
   // lose the parsed list if the user dismissed accidentally).
   const [appliedResult, setAppliedResult] = useState<{ createdIds: number[]; failedTitles: string[] } | null>(null)
@@ -95,6 +124,8 @@ export function GenerateScenesDialog({
       setCount(DEFAULT_COUNT)
       setAdvancedOpen(false)
       setApplyLoading(false)
+      setAlsoExtract(false)
+      setExtractLoading(false)
       setAppliedResult(null)
       reset()
     }
@@ -155,6 +186,7 @@ export function GenerateScenesDialog({
   const handleApply = async () => {
     if (parsedScenes.length === 0) return
     setApplyLoading(true)
+    let extractSummary: WorldExtractSummary | undefined
     try {
       const result = await applyGeneratedScenes({
         projectId,
@@ -165,7 +197,32 @@ export function GenerateScenesDialog({
       setAppliedResult(result)
       const firstId = result.createdIds[0]
       if (firstId !== undefined) {
-        onApplied({ firstId, createdIds: result.createdIds, failedTitles: result.failedTitles })
+        // If the user opted in to also-extract, fire a follow-up
+        // `consistency_check` AI call over the freshly-created scenes and
+        // write any extracted characters / world elements / timeline /
+        // foreshadows / conflicts into the world DB. Runs only after the
+        // scenes are safely created (so a failed scene batch aborts the
+        // extract too) and only when the user explicitly checked the box.
+        if (alsoExtract && result.createdIds.length > 0) {
+          setExtractLoading(true)
+          try {
+            extractSummary = await runWorldExtract({
+              projectId,
+              model,
+              createdScenes: parsedScenes,
+              qc,
+            })
+          } catch (e) {
+            // Extraction is best-effort. The scenes are already saved; we
+            // just toast a warning and let the user re-run the chapter's
+            // "提取设定" action from the sidebar if they want to retry.
+            console.error('[GenerateScenesDialog] world extract failed:', e)
+            throw e
+          } finally {
+            setExtractLoading(false)
+          }
+        }
+        onApplied({ firstId, createdIds: result.createdIds, failedTitles: result.failedTitles, ...(extractSummary ? { extractSummary } : {}) })
       }
       // Only close the dialog when at least one scene was created — if
       // every scene failed the user should see the failure state and
@@ -177,6 +234,8 @@ export function GenerateScenesDialog({
       setApplyLoading(false)
     }
   }
+  /* runWorldExtract is defined at module scope below; see the long
+   * comment above its definition for the design rationale. */
 
   const handleClose = () => {
     // While the stream is running, treat "close" as a cancel — abort the
@@ -200,7 +259,7 @@ export function GenerateScenesDialog({
    * dialog itself stays interactive (cancel/apply buttons must keep
    * working) — only the rest of the page is dimmed.
    */
-  const busy = step === 'generating' || applyLoading
+  const busy = step === 'generating' || applyLoading || extractLoading
 
   return (
     <Dialog
@@ -407,20 +466,44 @@ export function GenerateScenesDialog({
                 </div>
               )}
             </div>
+            <div className="flex items-center gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
+              <label
+                className={cn(
+                  'flex cursor-pointer items-center gap-1.5 select-none',
+                  (applyLoading || parsedScenes.length === 0) && 'cursor-not-allowed opacity-60',
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={alsoExtract}
+                  disabled={applyLoading || parsedScenes.length === 0}
+                  onChange={(e) => setAlsoExtract(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-input accent-primary"
+                />
+                <Database className="h-3.5 w-3.5" />
+                <span>应用并提取设定</span>
+              </label>
+              <span className="text-[11px] opacity-70">（再跑一次 AI，自动写入人物/设定/时间线/伏笔/冲突）</span>
+            </div>
             <DialogFooter>
-              <Button variant="outline" onClick={handleRegenerate} disabled={applyLoading}>
+              <Button variant="outline" onClick={handleRegenerate} disabled={applyLoading || extractLoading}>
                 <RotateCcw className="mr-1.5 h-4 w-4" />
                 重新生成
               </Button>
-              <Button variant="outline" onClick={handleClose} disabled={applyLoading}>
+              <Button variant="outline" onClick={handleClose} disabled={applyLoading || extractLoading}>
                 取消
               </Button>
               <Button
                 onClick={handleApply}
-                disabled={applyLoading || parsedScenes.length === 0}
-                className={cn(applyLoading && 'opacity-60')}
+                disabled={applyLoading || extractLoading || parsedScenes.length === 0}
+                className={cn((applyLoading || extractLoading) && 'opacity-60')}
               >
-                {applyLoading ? (
+                {extractLoading ? (
+                  <>
+                    <div className="mr-1.5 h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    提取设定中…
+                  </>
+                ) : applyLoading ? (
                   <>
                     <div className="mr-1.5 h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
                     应用中…
@@ -428,7 +511,7 @@ export function GenerateScenesDialog({
                 ) : (
                   <>
                     <Check className="mr-1.5 h-4 w-4" />
-                    应用 {parsedScenes.length > 0 ? `${parsedScenes.length} 个场景` : ''}
+                    {alsoExtract ? '应用并提取' : '应用'} {parsedScenes.length > 0 ? `${parsedScenes.length} 个场景` : ''}
                   </>
                 )}
               </Button>
@@ -438,4 +521,129 @@ export function GenerateScenesDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+/**
+ * Optional follow-up after `applyGeneratedScenes`: fire a single
+ * `consistency_check` AI call over the freshly-created scenes and write any
+ * extracted entities into the world DB.
+ *
+ * The server's `consistency_check` prompt template already takes care of
+ * de-duplication: its `ctx` block includes the existing world DB summary,
+ * so the AI is told to skip anything already saved. We then write anything
+ * it returns using `create*` (not `update*`) so a re-run on the same
+ * scenes won't silently double-up. If you want true merge semantics later,
+ * the right place is to switch this to the `update*` paths with a name
+ * match — that's what `autoSyncWorld.ts` used to do before it was
+ * removed.
+ *
+ * `consistency_check` does not require `sceneId`/`chapterId` — the server
+ * pulls the existing world DB summary as `ctx` for de-dup regardless —
+ * so we just pass `projectId`. The fetch body is the freshly-created
+ * scenes joined with `### <title>` markers so the AI's extraction is
+ * anchored in the same format it gets elsewhere.
+ */
+async function runWorldExtract(opts: {
+  projectId: number
+  model: string
+  createdScenes: ParsedScene[]
+  qc: QueryClient
+}): Promise<WorldExtractSummary> {
+  const text = opts.createdScenes
+    .map((s) => `### ${s.title}\n\n${s.markdown}`)
+    .join('\n\n')
+  const raw = await runAiCompletion({
+    projectId: opts.projectId,
+    mode: 'consistency_check',
+    model: opts.model,
+    inputText: text,
+  })
+  const data = parseAiJson<{
+    characters?: Array<Record<string, unknown>>
+    worldElements?: Array<Record<string, unknown>>
+    timeline?: Array<Record<string, unknown>>
+    foreshadows?: Array<Record<string, unknown>>
+    conflicts?: Array<Record<string, unknown>>
+  }>(raw)
+  if (!data) {
+    // AI output wasn't valid JSON — the user can re-run from the sidebar.
+    throw new Error('AI 输出无法解析为 JSON')
+  }
+  const str = (v: unknown, dflt = ''): string => (typeof v === 'string' ? v : dflt)
+  const arr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  const summary: WorldExtractSummary = {
+    characters: 0,
+    worldElements: 0,
+    timeline: 0,
+    foreshadows: 0,
+    conflicts: 0,
+  }
+  for (const c of data.characters ?? []) {
+    const name = str(c.name).trim() || '未命名'
+    await worldApi.createCharacter(opts.projectId, {
+      name,
+      aliases: arr(c.aliases),
+      appearance: str(c.appearance),
+      personality: str(c.personality),
+      background: str(c.background),
+      relationships: str(c.relationships),
+      voiceProfile: str(c.voiceProfile),
+      notes: str(c.notes),
+    } as never)
+    summary.characters += 1
+  }
+  for (const w of data.worldElements ?? []) {
+    const name = str(w.name).trim() || '未命名'
+    await worldApi.createWorldElement(opts.projectId, {
+      name,
+      category: (str(w.category) || 'concept') as never,
+      description: str(w.description),
+      notes: str(w.notes),
+    } as never)
+    summary.worldElements += 1
+  }
+  for (const t of data.timeline ?? []) {
+    const title = str(t.title).trim() || '未命名'
+    await worldApi.createTimelineEvent(opts.projectId, {
+      title,
+      era: str(t.era),
+      description: str(t.description),
+      notes: str(t.notes),
+    } as never)
+    summary.timeline += 1
+  }
+  for (const f of data.foreshadows ?? []) {
+    const title = str(f.title).trim() || '未命名'
+    await worldApi.createForeshadow(opts.projectId, {
+      title,
+      description: str(f.description),
+      status: (str(f.status) || 'planted') as never,
+      notes: str(f.notes),
+    } as never)
+    summary.foreshadows += 1
+  }
+  for (const cf of data.conflicts ?? []) {
+    const title = str(cf.title).trim() || '未命名'
+    await worldApi.createConflict(opts.projectId, {
+      title,
+      type: (str(cf.type) || 'person_vs_person') as never,
+      description: str(cf.description),
+      setup: str(cf.setup),
+      escalation: str(cf.escalation),
+      climax: str(cf.climax),
+      resolution: str(cf.resolution),
+      status: 'setup',
+      notes: str(cf.notes),
+    } as never)
+    summary.conflicts += 1
+  }
+  // The world API caches live under these query keys in WorldPanel, so
+  // invalidating them refreshes the sidebar counts after extraction.
+  opts.qc.invalidateQueries({ queryKey: ['characters', opts.projectId] })
+  opts.qc.invalidateQueries({ queryKey: ['worldElements', opts.projectId] })
+  opts.qc.invalidateQueries({ queryKey: ['timeline', opts.projectId] })
+  opts.qc.invalidateQueries({ queryKey: ['foreshadows', opts.projectId] })
+  opts.qc.invalidateQueries({ queryKey: ['conflicts', opts.projectId] })
+  return summary
 }

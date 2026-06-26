@@ -1294,7 +1294,7 @@ ${sceneText}`
           chapterTitle={addSceneChapterTitle}
           model={settings.data?.model ?? 'gpt-4o-mini'}
           qc={qc}
-          onApplied={({ firstId, createdIds, failedTitles }) => {
+          onApplied={({ firstId, createdIds, failedTitles, extractSummary }) => {
             if (createdIds.length > 0) {
               setSceneId(firstId)
             }
@@ -1306,6 +1306,36 @@ ${sceneText}`
                 title: `已创建 ${createdIds.length} 个场景，${failedTitles.length} 个失败`,
                 description: failedTitles.join('、'),
               })
+            }
+            // If the user opted into "应用并提取设定", report the
+            // per-entity counts as a follow-up toast. We toast this AFTER
+            // the scene-applied toast so the user sees them in order, and
+            // skip it entirely when extraction didn't run.
+            if (extractSummary) {
+              const total =
+                extractSummary.characters +
+                extractSummary.worldElements +
+                extractSummary.timeline +
+                extractSummary.foreshadows +
+                extractSummary.conflicts
+              if (total === 0) {
+                toast({ kind: 'info', title: '提取完成：未发现可写入的设定' })
+              } else {
+                const parts = [
+                  extractSummary.characters && `${extractSummary.characters} 人物`,
+                  extractSummary.worldElements && `${extractSummary.worldElements} 设定`,
+                  extractSummary.timeline && `${extractSummary.timeline} 时间线`,
+                  extractSummary.foreshadows && `${extractSummary.foreshadows} 伏笔`,
+                  extractSummary.conflicts && `${extractSummary.conflicts} 冲突`,
+                ]
+                  .filter(Boolean)
+                  .join('、')
+                toast({
+                  kind: 'success',
+                  title: `已提取 ${total} 条设定`,
+                  description: parts,
+                })
+              }
             }
           }}
         />

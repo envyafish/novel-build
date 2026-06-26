@@ -130,20 +130,41 @@ async function readChapterTail(
  * modes that need to write *new* content that fits the planned story, so
  * e.g. `generate_chapter` doesn't drift away from the planned story arc.
  *
- * Returns an empty string if the scene is not found or the project has no
- * structure yet (callers can fall back to the prior behaviour silently).
+ * Two anchor modes:
+ *   - sceneId: build the tree around the volume containing that scene,
+ *     marking the scene's chapter as "current". Used by per-scene flows
+ *     (`continue`, `polish`, `rewrite`, …).
+ *   - chapterId: build the same tree but mark the given chapter as
+ *     "current" regardless of which scene it belongs to. Used by chapter
+ *     flows like `generate_chapter` invoked *before* any scene exists in
+ *     the target chapter.
+ *
+ * Returns an empty string if the anchor can't be resolved.
  */
-function buildOutlineSummary(db: Database, projectId: number, currentSceneId: number): string {
+function buildOutlineSummary(
+  db: Database,
+  projectId: number,
+  anchor: { sceneId: number } | { chapterId: number },
+): string {
   const project = db.prepare<{ story_arc_notes: string }>(
     'SELECT story_arc_notes FROM projects WHERE id = ?',
   ).get(projectId)
 
-  const loc = db.prepare<{ volume_id: number; chapter_id: number; volume_name: string; volume_slug: string; chapter_title: string; chapter_slug: string }>(
-    `SELECT v.id as volume_id, c.id as chapter_id, v.name as volume_name, v.slug as volume_slug,
-            c.title as chapter_title, c.slug as chapter_slug
-     FROM scenes s JOIN chapters c ON s.chapter_id = c.id JOIN volumes v ON c.volume_id = v.id
-     WHERE s.id = ?`,
-  ).get(currentSceneId)
+  // Resolve {volumeId, chapterId, volumeName, volumeSlug, chapterTitle}
+  // depending on which anchor we got.
+  const loc = 'sceneId' in anchor
+    ? db.prepare<{ volume_id: number; chapter_id: number; volume_name: string; volume_slug: string; chapter_title: string; chapter_slug: string }>(
+        `SELECT v.id as volume_id, c.id as chapter_id, v.name as volume_name, v.slug as volume_slug,
+                c.title as chapter_title, c.slug as chapter_slug
+         FROM scenes s JOIN chapters c ON s.chapter_id = c.id JOIN volumes v ON c.volume_id = v.id
+         WHERE s.id = ?`,
+      ).get(anchor.sceneId)
+    : db.prepare<{ volume_id: number; chapter_id: number; volume_name: string; volume_slug: string; chapter_title: string; chapter_slug: string }>(
+        `SELECT v.id as volume_id, c.id as chapter_id, v.name as volume_name, v.slug as volume_slug,
+                c.title as chapter_title, c.slug as chapter_slug
+         FROM chapters c JOIN volumes v ON c.volume_id = v.id
+         WHERE c.id = ?`,
+      ).get(anchor.chapterId)
   if (!loc) return ''
 
   const chapters = db.prepare<{ id: number; title: string; slug: string; order_index: number }>(
@@ -254,11 +275,20 @@ export async function buildContext(input: ContextInput): Promise<{ messages: Cha
   // Build world summary for AI context
   const worldSummary = buildWorldSummary(input.db, projectId)
   // Inject the structural outline only for modes that write new content
-  // aligned with the planned story. Outline requires a scene (it reads the
-  // scene's volume's chapter tree); skip when sceneId is absent.
-  const outlineSummary = row && input.sceneId !== undefined && NEEDS_OUTLINE.includes(input.mode)
-    ? buildOutlineSummary(input.db, projectId, input.sceneId)
-    : ''
+  // aligned with the planned story. Outline is built from whichever anchor
+  // is available — sceneId (the existing scene-level path) or chapterId
+  // (so chapter-level flows like `generate_chapter` invoked *before* any
+  // scene exists in the chapter still get the story arc + outline tree).
+  const outlineAnchor: { sceneId: number } | { chapterId: number } | undefined =
+    input.sceneId !== undefined
+      ? { sceneId: input.sceneId }
+      : input.chapterId !== undefined
+        ? { chapterId: input.chapterId }
+        : undefined
+  const outlineSummary =
+    outlineAnchor && NEEDS_OUTLINE.includes(input.mode)
+      ? buildOutlineSummary(input.db, projectId, outlineAnchor)
+      : ''
 
   if (outlineSummary) {
     ctxText += `\n\n[Outline]\n${outlineSummary}`

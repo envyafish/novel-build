@@ -7,7 +7,9 @@
       "Bash(git add *)",
       "Bash(git commit -m '修复：删除审稿/提取面板的 localStorage 持久化 *)",
       "Bash(pnpm test *)",
-      "Bash(git commit -m '修复：移除 AI 流的中断持久化与恢复功能 *)"
+      "Bash(git commit -m '修复：移除 AI 流的中断持久化与恢复功能 *)",
+      "Bash(git commit -m '功能：审稿/提取面板改为居中模态并支持阻塞取消 *)",
+      "Bash(git commit -m '功能：新建场景与故事弧线对话框在 AI 执行时阻塞关闭 *)"
     ]
   }
 }
