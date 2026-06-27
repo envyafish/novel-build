@@ -13,6 +13,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Sparkles, X, RotateCcw, Check, FileText, ChevronDown, Database } from 'lucide-react'
 import { useAiStream } from '../../hooks/useAiStream.js'
+import { ApiClientError } from '../../api/client.js'
 import { splitChapterToScenes, type ParsedScene } from './sceneSplitter.js'
 import { applyGeneratedScenes } from './sceneBatchCreate.js'
 import { parseAiJson } from '@novel/shared'
@@ -46,6 +47,7 @@ interface GenerateScenesDialogProps {
     createdIds: number[]
     failedTitles: string[]
     extractSummary?: WorldExtractSummary
+    extractError?: string
   }) => void
 }
 
@@ -187,6 +189,7 @@ export function GenerateScenesDialog({
     if (parsedScenes.length === 0) return
     setApplyLoading(true)
     let extractSummary: WorldExtractSummary | undefined
+    let extractError: string | undefined
     try {
       const result = await applyGeneratedScenes({
         projectId,
@@ -213,16 +216,21 @@ export function GenerateScenesDialog({
               qc,
             })
           } catch (e) {
-            // Extraction is best-effort. The scenes are already saved; we
-            // just toast a warning and let the user re-run the chapter's
-            // "提取设定" action from the sidebar if they want to retry.
+            // Capture but don't throw — scenes are already saved and the
+            // dialog must still close. EditorPage surfaces this as a toast.
             console.error('[GenerateScenesDialog] world extract failed:', e)
-            throw e
+            extractError = (e as Error).message
           } finally {
             setExtractLoading(false)
           }
         }
-        onApplied({ firstId, createdIds: result.createdIds, failedTitles: result.failedTitles, ...(extractSummary ? { extractSummary } : {}) })
+        onApplied({
+          firstId,
+          createdIds: result.createdIds,
+          failedTitles: result.failedTitles,
+          ...(extractSummary ? { extractSummary } : {}),
+          ...(extractError ? { extractError } : {}),
+        })
       }
       // Only close the dialog when at least one scene was created — if
       // every scene failed the user should see the failure state and
@@ -552,12 +560,17 @@ async function runWorldExtract(opts: {
   const text = opts.createdScenes
     .map((s) => `### ${s.title}\n\n${s.markdown}`)
     .join('\n\n')
-  const raw = await runAiCompletion({
-    projectId: opts.projectId,
-    mode: 'consistency_check',
-    model: opts.model,
-    inputText: text,
-  })
+  let raw: string
+  try {
+    raw = await runAiCompletion({
+      projectId: opts.projectId,
+      mode: 'consistency_check',
+      model: opts.model,
+      inputText: text,
+    })
+  } catch (e) {
+    throw new Error(`AI 提取调用失败: ${(e as Error).message}`)
+  }
   const data = parseAiJson<{
     characters?: Array<Record<string, unknown>>
     worldElements?: Array<Record<string, unknown>>
@@ -569,6 +582,14 @@ async function runWorldExtract(opts: {
     // AI output wasn't valid JSON — the user can re-run from the sidebar.
     throw new Error('AI 输出无法解析为 JSON')
   }
+  // Fetch all existing entities ONCE so we can dedup instead of always creating.
+  const [existingChars, existingWorld, existingTimeline, existingForeshadows, existingConflicts] = await Promise.all([
+    worldApi.listCharacters(opts.projectId),
+    worldApi.listWorldElements(opts.projectId),
+    worldApi.listTimeline(opts.projectId),
+    worldApi.listForeshadows(opts.projectId),
+    worldApi.listConflicts(opts.projectId),
+  ])
   const str = (v: unknown, dflt = ''): string => (typeof v === 'string' ? v : dflt)
   const arr = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
@@ -581,62 +602,165 @@ async function runWorldExtract(opts: {
   }
   for (const c of data.characters ?? []) {
     const name = str(c.name).trim() || '未命名'
-    await worldApi.createCharacter(opts.projectId, {
-      name,
-      aliases: arr(c.aliases),
-      appearance: str(c.appearance),
-      personality: str(c.personality),
-      background: str(c.background),
-      relationships: str(c.relationships),
-      voiceProfile: str(c.voiceProfile),
-      notes: str(c.notes),
-    } as never)
-    summary.characters += 1
+    const existing = existingChars.find((e) => e.name === name)
+    const existingNotes = existing?.notes || ''
+    const newNotes = str(c.notes)
+    const mergedNotes = existingNotes && newNotes ? existingNotes + '\n\n---\n\n' + newNotes : newNotes || existingNotes
+    try {
+      if (existing) {
+        await worldApi.updateCharacter(existing.id, {
+          name,
+          aliases: arr(c.aliases).length ? arr(c.aliases) : existing.aliases,
+          appearance: str(c.appearance) || existing.appearance,
+          personality: str(c.personality) || existing.personality,
+          background: str(c.background) || existing.background,
+          relationships: str(c.relationships) || existing.relationships,
+          voiceProfile: str(c.voiceProfile) || existing.voiceProfile,
+          notes: mergedNotes,
+          expectedUpdatedAt: existing.updatedAt,
+        } as never)
+      } else {
+        await worldApi.createCharacter(opts.projectId, {
+          name,
+          aliases: arr(c.aliases),
+          appearance: str(c.appearance),
+          personality: str(c.personality),
+          background: str(c.background),
+          relationships: str(c.relationships),
+          voiceProfile: str(c.voiceProfile),
+          notes: str(c.notes),
+        } as never)
+      }
+      summary.characters += 1
+    } catch (e) {
+      if ((e as ApiClientError)?.status === 409) continue
+      throw e
+    }
   }
   for (const w of data.worldElements ?? []) {
     const name = str(w.name).trim() || '未命名'
-    await worldApi.createWorldElement(opts.projectId, {
-      name,
-      category: (str(w.category) || 'concept') as never,
-      description: str(w.description),
-      notes: str(w.notes),
-    } as never)
-    summary.worldElements += 1
+    const existing = existingWorld.find((e) => e.name === name)
+    const existingNotes = existing?.notes || ''
+    const newNotes = str(w.notes)
+    const mergedNotes = existingNotes && newNotes ? existingNotes + '\n\n---\n\n' + newNotes : newNotes || existingNotes
+    try {
+      if (existing) {
+        await worldApi.updateWorldElement(existing.id, {
+          name,
+          category: (str(w.category) as never) || existing.category,
+          description: str(w.description) || existing.description,
+          notes: mergedNotes,
+          expectedUpdatedAt: existing.updatedAt,
+        } as never)
+      } else {
+        await worldApi.createWorldElement(opts.projectId, {
+          name,
+          category: (str(w.category) || 'concept') as never,
+          description: str(w.description),
+          notes: str(w.notes),
+        } as never)
+      }
+      summary.worldElements += 1
+    } catch (e) {
+      if ((e as ApiClientError)?.status === 409) continue
+      throw e
+    }
   }
   for (const t of data.timeline ?? []) {
     const title = str(t.title).trim() || '未命名'
-    await worldApi.createTimelineEvent(opts.projectId, {
-      title,
-      era: str(t.era),
-      description: str(t.description),
-      notes: str(t.notes),
-    } as never)
-    summary.timeline += 1
+    const existing = existingTimeline.find((e) => e.title === title)
+    const existingNotes = existing?.notes || ''
+    const newNotes = str(t.notes)
+    const mergedNotes = existingNotes && newNotes ? existingNotes + '\n\n---\n\n' + newNotes : newNotes || existingNotes
+    try {
+      if (existing) {
+        await worldApi.updateTimelineEvent(existing.id, {
+          title,
+          era: str(t.era) || existing.era,
+          description: str(t.description) || existing.description,
+          notes: mergedNotes,
+          expectedUpdatedAt: existing.updatedAt,
+        } as never)
+      } else {
+        await worldApi.createTimelineEvent(opts.projectId, {
+          title,
+          era: str(t.era),
+          description: str(t.description),
+          notes: str(t.notes),
+        } as never)
+      }
+      summary.timeline += 1
+    } catch (e) {
+      if ((e as ApiClientError)?.status === 409) continue
+      throw e
+    }
   }
   for (const f of data.foreshadows ?? []) {
     const title = str(f.title).trim() || '未命名'
-    await worldApi.createForeshadow(opts.projectId, {
-      title,
-      description: str(f.description),
-      status: (str(f.status) || 'planted') as never,
-      notes: str(f.notes),
-    } as never)
-    summary.foreshadows += 1
+    const existing = existingForeshadows.find((e) => e.title === title)
+    const existingNotes = existing?.notes || ''
+    const newNotes = str(f.notes)
+    const mergedNotes = existingNotes && newNotes ? existingNotes + '\n\n---\n\n' + newNotes : newNotes || existingNotes
+    try {
+      if (existing) {
+        await worldApi.updateForeshadow(existing.id, {
+          title,
+          description: str(f.description) || existing.description,
+          status: (str(f.status) as never) || existing.status,
+          notes: mergedNotes,
+          expectedUpdatedAt: existing.updatedAt,
+        } as never)
+      } else {
+        await worldApi.createForeshadow(opts.projectId, {
+          title,
+          description: str(f.description),
+          status: (str(f.status) || 'planted') as never,
+          notes: str(f.notes),
+        } as never)
+      }
+      summary.foreshadows += 1
+    } catch (e) {
+      if ((e as ApiClientError)?.status === 409) continue
+      throw e
+    }
   }
   for (const cf of data.conflicts ?? []) {
     const title = str(cf.title).trim() || '未命名'
-    await worldApi.createConflict(opts.projectId, {
-      title,
-      type: (str(cf.type) || 'person_vs_person') as never,
-      description: str(cf.description),
-      setup: str(cf.setup),
-      escalation: str(cf.escalation),
-      climax: str(cf.climax),
-      resolution: str(cf.resolution),
-      status: 'setup',
-      notes: str(cf.notes),
-    } as never)
-    summary.conflicts += 1
+    const existing = existingConflicts.find((e) => e.title === title)
+    const existingNotes = existing?.notes || ''
+    const newNotes = str(cf.notes)
+    const mergedNotes = existingNotes && newNotes ? existingNotes + '\n\n---\n\n' + newNotes : newNotes || existingNotes
+    try {
+      if (existing) {
+        await worldApi.updateConflict(existing.id, {
+          title,
+          type: (str(cf.type) as never) || existing.type,
+          description: str(cf.description) || existing.description,
+          setup: str(cf.setup) || existing.setup,
+          escalation: str(cf.escalation) || existing.escalation,
+          climax: str(cf.climax) || existing.climax,
+          resolution: str(cf.resolution) || existing.resolution,
+          notes: mergedNotes,
+          expectedUpdatedAt: existing.updatedAt,
+        } as never)
+      } else {
+        await worldApi.createConflict(opts.projectId, {
+          title,
+          type: (str(cf.type) || 'person_vs_person') as never,
+          description: str(cf.description),
+          setup: str(cf.setup),
+          escalation: str(cf.escalation),
+          climax: str(cf.climax),
+          resolution: str(cf.resolution),
+          status: 'setup',
+          notes: str(cf.notes),
+        } as never)
+      }
+      summary.conflicts += 1
+    } catch (e) {
+      if ((e as ApiClientError)?.status === 409) continue
+      throw e
+    }
   }
   // The world API caches live under these query keys in WorldPanel, so
   // invalidating them refreshes the sidebar counts after extraction.

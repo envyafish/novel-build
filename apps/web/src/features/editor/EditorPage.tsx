@@ -1467,7 +1467,7 @@ ${sceneText}`
           chapterTitle={addSceneChapterTitle}
           model={settings.data?.model ?? 'gpt-4o-mini'}
           qc={qc}
-          onApplied={({ firstId, createdIds, failedTitles, extractSummary }) => {
+          onApplied={({ firstId, createdIds, failedTitles, extractSummary, extractError }) => {
             if (createdIds.length > 0) {
               setSceneId(firstId)
             }
@@ -1484,7 +1484,13 @@ ${sceneText}`
             // per-entity counts as a follow-up toast. We toast this AFTER
             // the scene-applied toast so the user sees them in order, and
             // skip it entirely when extraction didn't run.
-            if (extractSummary) {
+            if (extractError) {
+              toast({
+                kind: 'warning',
+                title: '提取设定失败',
+                description: extractError,
+              })
+            } else if (extractSummary) {
               const total =
                 extractSummary.characters +
                 extractSummary.worldElements +
