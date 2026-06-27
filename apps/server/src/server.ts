@@ -27,7 +27,7 @@ export async function buildServer(opts: { enableExternalScan?: boolean; silentLo
   const registry = new ProviderRegistry(cfg.appConfigPath)
   await registry.load()
   registerProjectRoutes(app, db, cfg.novelsDir)
-  registerOutlineRoutes(app, db)
+  registerOutlineRoutes(app, db, cfg.novelsDir)
   registerSceneRoutes(app, db, cfg.novelsDir)
   registerSnapshotRoutes(app, db, cfg.novelsDir)
   registerAiRoutes(app, db, registry, cfg.novelsDir)
