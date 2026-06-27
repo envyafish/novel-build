@@ -850,6 +850,7 @@ ${sceneText}`
         } else {
           // Extract: parse combined settings + voice result
           let savedCount = 0
+          let skipCount = 0
           let settingsText = ''
           let voiceText = ''
           try {
@@ -860,10 +861,6 @@ ${sceneText}`
             // Fallback: treat as plain settings text
             settingsText = reviewText
           }
-
-          // Debug: show what we're trying to parse
-          console.log('[Extract] settingsText length:', settingsText.length)
-          console.log('[Extract] settingsText preview:', settingsText.slice(0, 200))
 
           // 1. Save settings (characters, world elements, timeline, conflicts)
           if (settingsText) {
@@ -911,18 +908,24 @@ ${sceneText}`
                   const newNotes = str(c.notes)
                   const mergedNotes = existingNotes && newNotes ? existingNotes + '\n\n---\n\n' + newNotes : newNotes || existingNotes
                   const aliases = arr(c.aliases)
-                  await worldApi.updateCharacter(existing.id, {
-                    name,
-                    aliases: aliases.length ? aliases : existing.aliases,
-                    appearance: str(c.appearance) || existing.appearance,
-                    personality: str(c.personality) || existing.personality,
-                    background: str(c.background) || existing.background,
-                    relationships: str(c.relationships) || existing.relationships,
-                    voiceProfile: str(c.voiceProfile) || existing.voiceProfile,
-                    notes: mergedNotes,
-                    // Optimistic lock: skip if the entity was modified since we fetched it.
-                    expectedUpdatedAt: existing.updatedAt,
-                  } as any)
+                  try {
+                    await worldApi.updateCharacter(existing.id, {
+                      name,
+                      aliases: aliases.length ? aliases : existing.aliases,
+                      appearance: str(c.appearance) || existing.appearance,
+                      personality: str(c.personality) || existing.personality,
+                      background: str(c.background) || existing.background,
+                      relationships: str(c.relationships) || existing.relationships,
+                      voiceProfile: str(c.voiceProfile) || existing.voiceProfile,
+                      notes: mergedNotes,
+                      expectedUpdatedAt: existing.updatedAt,
+                    } as any)
+                  } catch (updateErr) {
+                    if (updateErr instanceof ApiClientError && updateErr.status === 409) {
+                      skipCount++; continue
+                    }
+                    throw updateErr
+                  }
                 } else {
                   await worldApi.createCharacter(projectId, {
                     name,
@@ -944,13 +947,20 @@ ${sceneText}`
                   const existingNotes = existing.notes || ''
                   const newNotes = str(w.notes)
                   const mergedNotes = existingNotes && newNotes ? existingNotes + '\n\n---\n\n' + newNotes : newNotes || existingNotes
-                  await worldApi.updateWorldElement(existing.id, {
-                    name,
-                    category: (str(w.category) as WorldCategory) || existing.category,
-                    description: str(w.description) || existing.description,
-                    notes: mergedNotes,
-                    expectedUpdatedAt: existing.updatedAt,
-                  } as any)
+                  try {
+                    await worldApi.updateWorldElement(existing.id, {
+                      name,
+                      category: (str(w.category) as WorldCategory) || existing.category,
+                      description: str(w.description) || existing.description,
+                      notes: mergedNotes,
+                      expectedUpdatedAt: existing.updatedAt,
+                    } as any)
+                  } catch (updateErr) {
+                    if (updateErr instanceof ApiClientError && updateErr.status === 409) {
+                      skipCount++; continue
+                    }
+                    throw updateErr
+                  }
                 } else {
                   await worldApi.createWorldElement(projectId, {
                     name,
@@ -968,13 +978,20 @@ ${sceneText}`
                   const existingNotes = existing.notes || ''
                   const newNotes = str(t.notes)
                   const mergedNotes = existingNotes && newNotes ? existingNotes + '\n\n---\n\n' + newNotes : newNotes || existingNotes
-                  await worldApi.updateTimelineEvent(existing.id, {
-                    title,
-                    era: str(t.era) || existing.era,
-                    description: str(t.description) || existing.description,
-                    notes: mergedNotes,
-                    expectedUpdatedAt: existing.updatedAt,
-                  } as any)
+                  try {
+                    await worldApi.updateTimelineEvent(existing.id, {
+                      title,
+                      era: str(t.era) || existing.era,
+                      description: str(t.description) || existing.description,
+                      notes: mergedNotes,
+                      expectedUpdatedAt: existing.updatedAt,
+                    } as any)
+                  } catch (updateErr) {
+                    if (updateErr instanceof ApiClientError && updateErr.status === 409) {
+                      skipCount++; continue
+                    }
+                    throw updateErr
+                  }
                 } else {
                   await worldApi.createTimelineEvent(projectId, {
                     title,
@@ -992,17 +1009,24 @@ ${sceneText}`
                   const existingNotes = existing.notes || ''
                   const newNotes = str(c.notes)
                   const mergedNotes = existingNotes && newNotes ? existingNotes + '\n\n---\n\n' + newNotes : newNotes || existingNotes
-                  await worldApi.updateConflict(existing.id, {
-                    title,
-                    type: (str(c.type) as ConflictType) || existing.type,
-                    description: str(c.description) || existing.description,
-                    setup: str(c.setup) || existing.setup,
-                    escalation: str(c.escalation) || existing.escalation,
-                    climax: str(c.climax) || existing.climax,
-                    resolution: str(c.resolution) || existing.resolution,
-                    notes: mergedNotes,
-                    expectedUpdatedAt: existing.updatedAt,
-                  } as any)
+                  try {
+                    await worldApi.updateConflict(existing.id, {
+                      title,
+                      type: (str(c.type) as ConflictType) || existing.type,
+                      description: str(c.description) || existing.description,
+                      setup: str(c.setup) || existing.setup,
+                      escalation: str(c.escalation) || existing.escalation,
+                      climax: str(c.climax) || existing.climax,
+                      resolution: str(c.resolution) || existing.resolution,
+                      notes: mergedNotes,
+                      expectedUpdatedAt: existing.updatedAt,
+                    } as any)
+                  } catch (updateErr) {
+                    if (updateErr instanceof ApiClientError && updateErr.status === 409) {
+                      skipCount++; continue
+                    }
+                    throw updateErr
+                  }
                 } else {
                   await worldApi.createConflict(projectId, {
                     title,
@@ -1025,13 +1049,20 @@ ${sceneText}`
                   const existingNotes = existing.notes || ''
                   const newNotes = str(f.notes)
                   const mergedNotes = existingNotes && newNotes ? existingNotes + '\n\n---\n\n' + newNotes : newNotes || existingNotes
-                  await worldApi.updateForeshadow(existing.id, {
-                    title,
-                    description: str(f.description) || existing.description,
-                    status: (str(f.status) as ForeshadowStatus) || existing.status,
-                    notes: mergedNotes,
-                    expectedUpdatedAt: existing.updatedAt,
-                  } as any)
+                  try {
+                    await worldApi.updateForeshadow(existing.id, {
+                      title,
+                      description: str(f.description) || existing.description,
+                      status: (str(f.status) as ForeshadowStatus) || existing.status,
+                      notes: mergedNotes,
+                      expectedUpdatedAt: existing.updatedAt,
+                    } as any)
+                  } catch (updateErr) {
+                    if (updateErr instanceof ApiClientError && updateErr.status === 409) {
+                      skipCount++; continue
+                    }
+                    throw updateErr
+                  }
                 } else {
                   await worldApi.createForeshadow(projectId, {
                     title,
@@ -1054,8 +1085,12 @@ ${sceneText}`
           qc.invalidateQueries({ queryKey: ['timeline', projectId] })
           qc.invalidateQueries({ queryKey: ['conflicts', projectId] })
           qc.invalidateQueries({ queryKey: ['foreshadows', projectId] })
-          if (savedCount > 0) {
+          if (savedCount > 0 && skipCount === 0) {
             toast({ kind: 'success', title: `已保存 ${savedCount} 条设定到世界数据库` })
+          } else if (savedCount > 0 && skipCount > 0) {
+            toast({ kind: 'warning', title: `已保存 ${savedCount} 条设定，${skipCount} 条因冲突跳过`, description: '部分设定在提取期间被手动修改过，已跳过以保护手动编辑' })
+          } else if (skipCount > 0 && savedCount === 0) {
+            toast({ kind: 'warning', title: `${skipCount} 条设定因冲突跳过`, description: '所有匹配的设定在提取期间被手动修改过' })
           } else if (!settingsText) {
             toast({ kind: 'error', title: '提取失败', description: 'AI 未返回有效的设定数据，请重试' })
           } else {
