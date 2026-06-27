@@ -89,6 +89,7 @@ ${ctx}
 
 [章节大纲]
 ${input}`,
+    maxOutputTokens: 8000,
   },
   consistency_check: {
     system:
@@ -139,6 +140,7 @@ ${ctx}
 
 【文本内容】
 ${input}`,
+    maxOutputTokens: 4000,
   },
   generate_character: {
     system: 'You are a novel character designer. Output valid JSON only, no markdown code blocks.',
@@ -160,6 +162,7 @@ ${ctx}
 
 [人物描述]
 ${input}`,
+    maxOutputTokens: 2000,
   },
   generate_world: {
     system: 'You are a novel worldbuilding assistant. Output valid JSON only, no markdown code blocks.',
@@ -178,6 +181,7 @@ ${ctx}
 
 [设定描述]
 ${input}`,
+    maxOutputTokens: 2000,
   },
   generate_timeline: {
     system: 'You are a novel timeline designer. Output valid JSON only, no markdown code blocks.',
@@ -196,6 +200,7 @@ ${ctx}
 
 [事件描述]
 ${input}`,
+    maxOutputTokens: 1500,
   },
   generate_foreshadow: {
     system: 'You are a novel plot designer specializing in foreshadowing. Output valid JSON only, no markdown code blocks.',
@@ -214,6 +219,7 @@ ${ctx}
 
 [伏笔描述]
 ${input}`,
+    maxOutputTokens: 1500,
   },
   generate_conflict: {
     system: 'You are a novel conflict designer specializing in dramatic tension. Output valid JSON only, no markdown code blocks.',
@@ -236,6 +242,7 @@ ${ctx}
 
 [冲突描述]
 ${input}`,
+    maxOutputTokens: 2000,
   },
   suggest_next_chapter: {
     system: COMMON_SYSTEM,
@@ -266,6 +273,7 @@ ${ctx}
 
 [当前章节内容摘要]
 ${input}`,
+    maxOutputTokens: 1000,
   },
   auto_review: {
     system: 'You are a senior novel editor providing detailed, constructive feedback. Write all feedback in Chinese.',
@@ -294,6 +302,7 @@ ${input}
 
 ## 改进建议
 给出 2-3 条具体的修改建议，每条建议包含：问题描述 + 修改方向 + 示例`,
+    maxOutputTokens: 4000,
   },
   plan_story_arc: {
     system: 'You are a master novelist and story architect. Write all output in Chinese.',
@@ -335,6 +344,7 @@ ${ctx}
 
 [已有大纲]
 ${input}`,
+    maxOutputTokens: 8000,
   },
   analyze_voice: {
     system: 'You are a dialogue specialist and character voice analyst. Write all output in Chinese.',
@@ -366,6 +376,7 @@ ${ctx}
 
 [待分析场景]
 ${input}`,
+    maxOutputTokens: 6000,
   },
 }
 
