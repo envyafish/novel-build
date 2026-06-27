@@ -62,7 +62,7 @@ export const MODE_PROMPTS: Record<CompletionMode, ModePrompt> = {
   generate_chapter: {
     system: COMMON_SYSTEM,
     buildUser: (input, ctx) =>
-      `根据下面的大纲写一个完整章节，包含 2-5 个场景。
+      `根据下面的大纲写一个完整章节。
 
 **严格遵循以下格式**：
 - 每个场景以一行 \`### <场景标题>\` 开头
@@ -71,6 +71,7 @@ export const MODE_PROMPTS: Record<CompletionMode, ModePrompt> = {
 - 场景之间用空行分隔
 - 不要使用 # 或 ## 标题，只用 ### 标记场景
 - 不要任何前言、后记或元注释
+- 必须按照输入中指定的场景数量输出场景（一个 \`###\` 标题对应一个场景）
 
 **示例格式**：
 

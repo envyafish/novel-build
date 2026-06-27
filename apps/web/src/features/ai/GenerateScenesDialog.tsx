@@ -159,9 +159,11 @@ export function GenerateScenesDialog({
     // Pack the count + (optional) description into inputText. When the user
     // leaves the description empty we still give the model a fallback cue so
     // it doesn't try to summarize nothing.
+    // Be very explicit about the count — the AI tends to drift toward 2-5
+    // scenes unless we hammer the number home. Repeat it in the prompt.
     const promptSection = trimmedDesc
-      ? `共 ${count} 个场景。\n\n${trimmedDesc}`
-      : `共 ${count} 个场景。基于当前章节末尾自然续写，无需用户提供额外大纲。`
+      ? `必须输出恰好 ${count} 个场景,不多不少。每个场景以一行 \`### <场景标题>\` 开头,共 ${count} 个 \`###\` 标记。\n\n${trimmedDesc}`
+      : `必须输出恰好 ${count} 个场景,不多不少。每个场景以一行 \`### <场景标题>\` 开头,共 ${count} 个 \`###\` 标记。基于当前章节末尾自然续写,无需用户提供额外大纲。`
     void start({
       projectId,
       chapterId,
