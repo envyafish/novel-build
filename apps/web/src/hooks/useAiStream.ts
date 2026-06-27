@@ -108,7 +108,10 @@ function apply(e: StreamEvent, set: (updater: (s: AiStreamState) => AiStreamStat
       ...s,
       status: 'done',
       ...(e.usage ? { usage: { promptTokens: e.usage.promptTokens ?? 0, completionTokens: e.usage.completionTokens ?? 0 } } : {}),
-      progressPct: progressPct(s.text, s.maxOutputTokens, /* fallback */ 100),
+      // Stream finished — the content is complete regardless of whether our
+      // char-based estimate hit 100%. Force it so the progress bar doesn't
+      // sit at, say, 87% after the AI has already stopped generating.
+      progressPct: 100,
     }))
   } else if (e.kind === 'error') {
     set((s) => ({ ...s, status: 'error', errorMessage: e.message }))
