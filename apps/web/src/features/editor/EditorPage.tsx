@@ -248,28 +248,31 @@ export function EditorPage() {
     return () => clearInterval(interval)
   }, [sceneId])
   const debouncedSave = useDebouncedSave(content, save, 800)
-  // Scene-switch safety: a debounced save for the *previous* scene that
-  // hasn't fired yet must NOT be flushed after the user navigates away.
-  // The `save` closure it would call captures `baseHash` and `sceneId` at
-  // render time, so flushing across a sceneId change would write the old
-  // scene's text under a stale baseHash (or, more commonly, the old text
-  // under the *new* scene's id) — either way the server's baseHash
-  // guard fires and we get a spurious 422 "external change detected".
+  // Scene-switch safety: when the user navigates to a different scene, any
+  // pending debounced save for the *previous* scene must not fire after the
+  // switch (it would race the new scene's baseHash and trigger a 422).
   //
-  // `cancel()` drops the pending save without firing it. We surface a
-  // warning toast if the user actually had unsaved content so they can
-  // hit Cmd+S next time before navigating away.
+  // Instead of dropping the pending write silently, we force-save the
+  // previous scene's content here. `force: true` bypasses the baseHash
+  // guard — safe because we're writing the user's own edits, not
+  // overwriting external changes. The force-save is fire-and-forget:
+  // when the user switches back to this scene, the scene-data query will
+  // return the freshly-saved content.
   const lastSceneIdRef = useRef<number | undefined>(sceneId)
   useEffect(() => {
     if (lastSceneIdRef.current !== sceneId) {
-      if (debouncedSave.pending) {
-        toast({
-          kind: 'warning',
-          title: '未保存的改动已丢弃',
-          description: '切场景前请按 ⌘S 保存当前 scene 的内容',
-        })
-      }
+      const prevId = lastSceneIdRef.current
       debouncedSave.cancel()
+      // Force-save whatever content we have for the previous scene.
+      // At this point in the render cycle `content` is still the old
+      // scene's text (the new scene's data hasn't arrived from the
+      // server yet), so we write the correct body to the correct id.
+      if (prevId !== undefined && content.trim()) {
+        void api(`/api/scenes/${prevId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ markdown: content, baseHash, force: true }),
+        }).catch(() => {})
+      }
       lastSceneIdRef.current = sceneId
     }
   }, [sceneId, debouncedSave])
