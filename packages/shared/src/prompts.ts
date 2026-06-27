@@ -140,7 +140,7 @@ ${ctx}
 
 【文本内容】
 ${input}`,
-    maxOutputTokens: 4000,
+    maxOutputTokens: 16000,
   },
   generate_character: {
     system: 'You are a novel character designer. Output valid JSON only, no markdown code blocks.',

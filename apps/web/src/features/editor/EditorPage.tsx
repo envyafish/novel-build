@@ -1074,9 +1074,15 @@ ${sceneText}`
                 savedCount++
               }
             } else {
-              setReviewOpen(false)
-              setReviewText('')
-              toast({ kind: 'error', title: '未找到有效的设定 JSON', description: 'AI 输出中未检测到结构化数据' })
+              // JSON parse failed — most likely the AI output was truncated
+              // by the token limit. Keep the dialog open and surface the raw
+              // output so the user can see what went wrong, retry, or
+              // manually copy/paste a smaller chunk.
+              toast({
+                kind: 'error',
+                title: '提取失败：AI 输出不是合法 JSON',
+                description: '可能是输出超过 token 上限被截断。可尝试提取更小的章节，或重新运行后让 AI 精简输出。',
+              })
               setApplyLoading(false)
               return
             }
