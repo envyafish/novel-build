@@ -20,6 +20,10 @@ const completeBody = z.object({
   model: z.string().min(1),
   inputText: z.string(),
   overrideMessages: z.array(z.object({ role: z.enum(['system', 'user', 'assistant']), content: z.string() })).optional(),
+  // For `generate_chapter`: when the current chapter has no written tail,
+  // also fetch the previous chapter's tail as opening context. Serialized
+  // novels use this for continuity; episodic novels leave it off.
+  includePrevChapterTail: z.boolean().optional(),
 })
 
 
@@ -100,6 +104,7 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
         contextPrevChars: aiRow.context_prev_chars,
         inputText: body.inputText,
         ...(body.overrideMessages ? { overrideMessages: body.overrideMessages } : {}),
+        ...(body.includePrevChapterTail ? { includePrevChapterTail: true } : {}),
       })
     } catch (e) {
       req.log.error({ err: e }, 'buildContext failed')

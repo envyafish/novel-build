@@ -20,6 +20,9 @@ export async function runAiCompletion(opts: {
   model: string
   inputText: string
   signal?: AbortSignal | null
+  /** For `generate_chapter`: when the current chapter is empty, also
+   *  pull the previous chapter's tail as opening context. */
+  includePrevChapterTail?: boolean
 }): Promise<string> {
   let res: Response
   try {
@@ -32,6 +35,7 @@ export async function runAiCompletion(opts: {
         mode: opts.mode,
         model: opts.model,
         inputText: opts.inputText,
+        ...(opts.includePrevChapterTail ? { includePrevChapterTail: true } : {}),
       }),
       ...(opts.signal ? { signal: opts.signal } : {}),
     })

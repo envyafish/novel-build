@@ -22,6 +22,11 @@ export interface ContextInput {
   contextPrevChars: number
   inputText: string
   overrideMessages?: ChatMessage[]
+  /** When set and the current chapter has no written tail, also pull the
+   *  tail of the *previous* chapter in the same volume. Useful for serialized
+   *  novels where chapters need narrative continuity; leave off for
+   *  episodic / anthology writing where each chapter stands alone. */
+  includePrevChapterTail?: boolean
 }
 
 // Modes where the AI needs to "find its place" inside the novel structure —
@@ -98,6 +103,40 @@ function buildWorldSummary(db: Database, projectId: number): string {
  * (their manuscript file may not exist yet — see saveScene flow).
  */
 async function readChapterTail(
+  db: Database,
+  projectSlug: string,
+  chapterId: number,
+  novelsDir: string,
+  tailChars: number,
+): Promise<string> {
+  return readChapterTailFrom(db, projectSlug, chapterId, novelsDir, tailChars)
+}
+
+/**
+ * Reads the tail of the previous chapter (same volume, chapter with the
+ * largest order_index < current). Returns '' if there is no prior chapter
+ * or it has no written tail.
+ */
+async function readPrevChapterTail(
+  db: Database,
+  projectSlug: string,
+  chapterId: number,
+  novelsDir: string,
+  tailChars: number,
+): Promise<string> {
+  const prev = db
+    .prepare<{ id: number }>(
+      `SELECT c2.id FROM chapters c1
+       JOIN chapters c2 ON c2.volume_id = c1.volume_id AND c2.order_index < c1.order_index
+       WHERE c1.id = ?
+       ORDER BY c2.order_index DESC LIMIT 1`,
+    )
+    .get(chapterId)
+  if (!prev) return ''
+  return readChapterTailFrom(db, projectSlug, prev.id, novelsDir, tailChars)
+}
+
+async function readChapterTailFrom(
   db: Database,
   projectSlug: string,
   chapterId: number,
@@ -275,12 +314,25 @@ export async function buildContext(input: ContextInput): Promise<{ messages: Cha
       const titlesLine = sceneTitles.length > 0
         ? sceneTitles.map((s) => `- ${s.title}`).join('\n')
         : '(本章节暂无场景)'
-      // If the chapter has no written tail (e.g. brand-new chapter) tell the
-      // AI explicitly so it knows to write an opening rather than try to
-      // continue from nothing.
-      const tailSection = chapterTail
-        ? `\n\n[Previous chapter tail]\n${chapterTail}`
-        : `\n\n[Previous chapter tail]\n(本章节还没有已写内容 — 这是开篇场景,请直接开始)`
+      // If the chapter has no written tail (e.g. brand-new chapter) and the
+      // caller opted into `includePrevChapterTail`, fall back to the tail
+      // of the previous chapter in the same volume so serialized novels
+      // can keep narrative continuity. Stays off by default for episodic
+      // / anthology writing where each chapter stands alone.
+      let tailSection: string
+      if (chapterTail) {
+        tailSection = `\n\n[Previous chapter tail]\n${chapterTail}`
+      } else if (input.includePrevChapterTail) {
+        const prevTail = await readPrevChapterTail(
+          input.db, proj.project_slug, input.chapterId,
+          input.novelsDir, input.contextPrevChars,
+        )
+        tailSection = prevTail
+          ? `\n\n[Previous chapter tail]\n(本章节尚未开始,以下是上一章末尾供参考:)\n${prevTail}`
+          : `\n\n[Previous chapter tail]\n(本章节还没有已写内容,上一章也没有 — 请直接开始)`
+      } else {
+        tailSection = `\n\n[Previous chapter tail]\n(本章节还没有已写内容 — 这是开篇场景,请直接开始)`
+      }
       ctxText = `[Current chapter]\nPrevious scenes in this chapter:\n${titlesLine}${tailSection}`
     }
   }

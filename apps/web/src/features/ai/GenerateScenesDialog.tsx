@@ -104,6 +104,12 @@ export function GenerateScenesDialog({
   // conflicts into the world DB. The user explicitly opted in via the
   // checkbox — we never extract silently.
   const [alsoExtract, setAlsoExtract] = useState(false)
+  // When the current chapter is empty (no written scenes), the user can opt
+  // into pulling the *previous* chapter's tail as opening context for the AI.
+  // Off by default — most chapter generation is meant to stand alone, and
+  // serialized novels usually want continuity only across specific chapter
+  // boundaries the author chooses.
+  const [usePrevChapterTail, setUsePrevChapterTail] = useState(false)
   const [extractLoading, setExtractLoading] = useState(false)
   // Persisted scene list across re-renders (e.g. cancel + reopen shouldn't
   // lose the parsed list if the user dismissed accidentally).
@@ -128,6 +134,7 @@ export function GenerateScenesDialog({
       setApplyLoading(false)
       setAlsoExtract(false)
       setExtractLoading(false)
+      setUsePrevChapterTail(false)
       setAppliedResult(null)
       reset()
     }
@@ -170,6 +177,7 @@ export function GenerateScenesDialog({
       mode: 'generate_chapter',
       model,
       inputText: promptSection,
+      ...(usePrevChapterTail ? { includePrevChapterTail: true } : {}),
     })
   }
 
@@ -350,19 +358,34 @@ export function GenerateScenesDialog({
                 高级选项
               </button>
               {advancedOpen && (
-                <div className="grid gap-1.5">
-                  <label htmlFor="gen-desc" className="text-xs font-medium text-foreground">
-                    章节描述 <span className="text-muted-foreground">（可选）</span>
+                <>
+                  <div className="grid gap-1.5">
+                    <label htmlFor="gen-desc" className="text-xs font-medium text-foreground">
+                      章节描述 <span className="text-muted-foreground">（可选）</span>
+                    </label>
+                    <Textarea
+                      id="gen-desc"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      rows={5}
+                      placeholder="例如：主角在雨夜的咖啡馆偶遇旧友，发现他正在被人追杀；两人决定连夜逃离…… 留空则让 AI 自由发挥。"
+                      autoFocus
+                    />
+                  </div>
+                  <label className="flex cursor-pointer items-start gap-2 rounded-md border border-dashed bg-muted/20 px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted/40">
+                    <input
+                      type="checkbox"
+                      checked={usePrevChapterTail}
+                      onChange={(e) => setUsePrevChapterTail(e.target.checked)}
+                      className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-primary"
+                    />
+                    <span className="leading-relaxed">
+                      <span className="font-medium text-foreground">从上一章末尾续写</span>
+                      <br />
+                      勾选后，若「{chapterTitle}」没有已写场景，AI 会参考上一章末尾（仅在章节为空时生效；单元剧/独立故事可关闭）。
+                    </span>
                   </label>
-                  <Textarea
-                    id="gen-desc"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    rows={5}
-                    placeholder="例如：主角在雨夜的咖啡馆偶遇旧友，发现他正在被人追杀；两人决定连夜逃离…… 留空则让 AI 自由发挥。"
-                    autoFocus
-                  />
-                </div>
+                </>
               )}
 
               <DialogFooter className="mt-2">

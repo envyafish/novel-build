@@ -476,7 +476,7 @@ export function EditorPage() {
   // ai_settings lookup and only needs sceneId for modes that pull scene-
   // specific context (continue/polish/rewrite on the current scene).
   const runAiFetch = useCallback(
-    (mode: string, inputText: string, opts?: { sceneId?: number; signal?: AbortSignal }) =>
+    (mode: string, inputText: string, opts?: { sceneId?: number; signal?: AbortSignal; includePrevChapterTail?: boolean }) =>
       runAiCompletion({
         projectId,
         ...(opts?.sceneId !== undefined ? { sceneId: opts.sceneId } : sceneId !== undefined ? { sceneId } : {}),
@@ -484,6 +484,7 @@ export function EditorPage() {
         model: settings.data?.model ?? 'gpt-4o-mini',
         inputText,
         ...(opts?.signal ? { signal: opts.signal } : {}),
+        ...(opts?.includePrevChapterTail ? { includePrevChapterTail: true } : {}),
       }),
     [projectId, sceneId, settings.data?.model],
   )
