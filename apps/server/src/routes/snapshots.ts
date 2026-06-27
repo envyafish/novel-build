@@ -87,12 +87,13 @@ export function registerSnapshotRoutes(app: any, db: Database, novelsDir: string
     const markdown = await snap.restoreScene(id, req.params.hash)
     // Write restored content to disk + update scenes.content_hash so the next
     // PUT uses a fresh baseHash and does not trigger spurious external_change.
+    // createSnapshot defaults to true — a safety snapshot of the current
+    // (pre-restore) content is automatically saved so the user can undo.
     await ms.saveScene({
       sceneId: id,
       markdown,
       baseHash: onDisk.hash,
       projectDirAbs: projectDir,
-      createSnapshot: false,
       force: true,
     })
     const after = await ms.readScene(id)

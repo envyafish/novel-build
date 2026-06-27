@@ -199,9 +199,16 @@ function buildOutlineSummary(
 
 export async function buildContext(input: ContextInput): Promise<{ messages: ChatMessage[]; modelMaxTokens: number }> {
   if (input.overrideMessages && input.overrideMessages.length > 0) {
+    // Guard against unbounded payloads — cap total content at 200k chars.
+    const totalLen = input.overrideMessages.reduce((n, m) => n + m.content.length, 0)
+    if (totalLen > 200_000) {
+      throw new Error(`overrideMessages too large (${totalLen} chars, max 200000)`)
+    }
     const sys = input.systemPrompt.trim()
     const msgs: ChatMessage[] = sys ? [{ role: 'system', content: sys }, ...input.overrideMessages] : input.overrideMessages
-    return { messages: msgs, modelMaxTokens: 0 }
+    // Use a sensible default instead of 0 — 0 means "no limit" which lets the
+    // provider generate indefinitely, burning tokens with no output cap.
+    return { messages: msgs, modelMaxTokens: 8192 }
   }
 
   // Resolve scene row + projectId. Scene is optional (project-level operations

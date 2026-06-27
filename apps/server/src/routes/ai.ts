@@ -87,6 +87,7 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
       aiRow = { system_prompt: '', context_prev_chars: 1500 }
     }
     let ctx
+    let contextBuildFailed = false
     try {
       ctx = await buildContext({
         db,
@@ -102,12 +103,14 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
       })
     } catch (e) {
       req.log.error({ err: e }, 'buildContext failed')
+      contextBuildFailed = true
       ctx = {
         messages: [
           { role: 'system', content: aiRow.system_prompt || '' },
           { role: 'user', content: body.inputText },
         ],
-        modelMaxTokens: 0,
+        // Reasonable fallback instead of 0 (which means "no limit").
+        modelMaxTokens: 4096,
       }
     }
 
@@ -116,6 +119,9 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
     let aborted = false
     reply.raw.on('close', () => { aborted = true })
     reply.raw.write(JSON.stringify({ maxOutputTokens: ctx.modelMaxTokens ?? 0 }) + '\n')
+    if (contextBuildFailed) {
+      reply.raw.write(JSON.stringify({ warning: 'context_build_failed', message: '上下文构建失败，AI 将在无世界观/大纲的降级模式下生成' }) + '\n')
+    }
     try {
       // 90s queue timeout: if the upstream provider hangs and two streams are
       // already in flight, the third request fails fast instead of blocking
@@ -137,7 +143,7 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
           if (aborted) break
           reply.raw.write(JSON.stringify({ delta }) + '\n')
           // We don't get token counts from the standard OpenAI delta stream; estimate from text length.
-          completionTokens = Math.ceil(delta.length / 1.5) // rough CJK char-to-token ratio
+          completionTokens += Math.ceil(delta.length / 1.5) // rough CJK char-to-token ratio
         }
         if (!aborted) {
           reply.raw.write(JSON.stringify({ done: true, usage: { promptTokens, completionTokens } }) + '\n')
@@ -146,8 +152,15 @@ export function registerAiRoutes(app: any, db: Database, registry: ProviderRegis
         limiter.release()
       }
     } catch (e) {
+      // Log the full error server-side for debugging, but strip upstream
+      // response bodies from the client-facing message — some providers
+      // echo API keys or auth headers in their error payloads.
       req.log.error({ err: e }, 'AI stream error')
-      reply.raw.write(JSON.stringify({ error: (e as Error).message, recoverable: true }) + '\n')
+      const raw = (e as Error).message ?? 'unknown error'
+      const safe = raw.startsWith('ai_http_')
+        ? `AI provider returned HTTP ${raw.slice(8).split(':')[0]}` // "ai_http_429: ..." → "AI provider returned HTTP 429"
+        : 'AI provider error'
+      reply.raw.write(JSON.stringify({ error: safe, recoverable: true }) + '\n')
     }
     reply.raw.end()
   })

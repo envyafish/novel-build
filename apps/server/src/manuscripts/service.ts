@@ -64,13 +64,21 @@ export class ManuscriptService {
     const projectId = scene.project_id
 
     return withProjectLock(projectId, async () => {
+      // Re-read content_hash from DB under the lock. The pre-lock read above
+      // may be stale if a concurrent save completed between the initial query
+      // and acquiring the per-project mutex.
+      const freshHash = this.db
+        .prepare<{ content_hash: string }>('SELECT content_hash FROM scenes WHERE id = ?')
+        .get(input.sceneId)
+      if (!freshHash) throw apiError(404, 'scene_not_found', `scene ${input.sceneId} not found`)
+
       // Re-read the file under the per-project lock. This is the canonical
       // baseHash check and the source of the old text for the word-count delta.
       // If a concurrent save raced us, we'll see the new content here and either
       // throw 422 (baseHash mismatch) or compute delta against the new baseline.
       const onDisk = await this.readScene(input.sceneId)
 
-      if (!input.force && scene.content_hash !== input.baseHash) {
+      if (!input.force && freshHash.content_hash !== input.baseHash) {
         throw apiError(422, 'external_change', 'manuscript changed on disk', 'reload the scene', { externalHash: onDisk.hash })
       }
 
