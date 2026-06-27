@@ -852,11 +852,9 @@ ${sceneText}`
           let savedCount = 0
           let skipCount = 0
           let settingsText = ''
-          let voiceText = ''
           try {
             const combined = JSON.parse(reviewText)
-            settingsText = combined.settings || ''
-            voiceText = combined.voice || ''
+            settingsText = combined.settings || reviewText
           } catch {
             // Fallback: treat as plain settings text
             settingsText = reviewText
@@ -881,6 +879,8 @@ ${sceneText}`
               const totalEntities = charCount + worldCount + timelineCount + conflictCount + foreshadowCount
 
               if (totalEntities === 0) {
+                setReviewOpen(false)
+                setReviewText('')
                 toast({
                   kind: 'info',
                   title: 'AI 未提取到设定',
@@ -1074,6 +1074,8 @@ ${sceneText}`
                 savedCount++
               }
             } else {
+              setReviewOpen(false)
+              setReviewText('')
               toast({ kind: 'error', title: '未找到有效的设定 JSON', description: 'AI 输出中未检测到结构化数据' })
               setApplyLoading(false)
               return
@@ -1085,6 +1087,10 @@ ${sceneText}`
           qc.invalidateQueries({ queryKey: ['timeline', projectId] })
           qc.invalidateQueries({ queryKey: ['conflicts', projectId] })
           qc.invalidateQueries({ queryKey: ['foreshadows', projectId] })
+          // Close the review panel — extraction is complete and the review text
+          // has been processed; keeping it open serves no purpose.
+          setReviewOpen(false)
+          setReviewText('')
           if (savedCount > 0 && skipCount === 0) {
             toast({ kind: 'success', title: `已保存 ${savedCount} 条设定到世界数据库` })
           } else if (savedCount > 0 && skipCount > 0) {
