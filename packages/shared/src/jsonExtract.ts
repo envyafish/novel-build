@@ -42,38 +42,50 @@ export function parseAiJson<T = unknown>(text: string): T | null {
   } catch {
     // fall through
   }
-  // 3. Find the first balanced {...} block, respecting string boundaries
-  const start = s.indexOf('{')
-  if (start < 0) return null
-  let depth = 0
-  let inStr = false
-  let escape = false
-  for (let i = start; i < s.length; i++) {
-    const ch = s[i]
-    if (inStr) {
-      if (escape) {
-        escape = false
-      } else if (ch === '\\') {
-        escape = true
-      } else if (ch === '"') {
-        inStr = false
+  // 3. Walk the string, picking out balanced `{...}` blocks (honoring
+  // string boundaries). The text may contain stray braces before the real
+  // JSON object (e.g. `"note: {comment}"` or even an unbalanced `{`); if
+  // the first balanced slice we extract doesn't parse, we keep scanning
+  // past it and try the next one instead of giving up.
+  let searchFrom = 0
+  while (searchFrom < s.length) {
+    const start = s.indexOf('{', searchFrom)
+    if (start < 0) return null
+    let depth = 0
+    let inStr = false
+    let escape = false
+    let end = -1
+    for (let i = start; i < s.length; i++) {
+      const ch = s[i]
+      if (inStr) {
+        if (escape) {
+          escape = false
+        } else if (ch === '\\') {
+          escape = true
+        } else if (ch === '"') {
+          inStr = false
+        }
+        continue
       }
-      continue
-    }
-    if (ch === '"') {
-      inStr = true
-    } else if (ch === '{') {
-      depth++
-    } else if (ch === '}') {
-      depth--
-      if (depth === 0) {
-        const candidate = s.slice(start, i + 1)
-        try {
-          return JSON.parse(candidate) as T
-        } catch {
-          return null
+      if (ch === '"') {
+        inStr = true
+      } else if (ch === '{') {
+        depth++
+      } else if (ch === '}') {
+        depth--
+        if (depth === 0) {
+          end = i
+          break
         }
       }
+    }
+    if (end < 0) return null
+    const candidate = s.slice(start, end + 1)
+    try {
+      return JSON.parse(candidate) as T
+    } catch {
+      // Skip past this candidate and try the next `{...}` block.
+      searchFrom = end + 1
     }
   }
   return null

@@ -248,13 +248,28 @@ export function EditorPage() {
     return () => clearInterval(interval)
   }, [sceneId])
   const debouncedSave = useDebouncedSave(content, save, 800)
-  // Flush any pending debounced save BEFORE switching scenes. Without this,
-  // a save that's still within the 800ms window will fire after the scene
-  // has changed and write the new content into the wrong scene row.
+  // Scene-switch safety: a debounced save for the *previous* scene that
+  // hasn't fired yet must NOT be flushed after the user navigates away.
+  // The `save` closure it would call captures `baseHash` and `sceneId` at
+  // render time, so flushing across a sceneId change would write the old
+  // scene's text under a stale baseHash (or, more commonly, the old text
+  // under the *new* scene's id) — either way the server's baseHash
+  // guard fires and we get a spurious 422 "external change detected".
+  //
+  // `cancel()` drops the pending save without firing it. We surface a
+  // warning toast if the user actually had unsaved content so they can
+  // hit Cmd+S next time before navigating away.
   const lastSceneIdRef = useRef<number | undefined>(sceneId)
   useEffect(() => {
     if (lastSceneIdRef.current !== sceneId) {
-      debouncedSave.flush()
+      if (debouncedSave.pending) {
+        toast({
+          kind: 'warning',
+          title: '未保存的改动已丢弃',
+          description: '切场景前请按 ⌘S 保存当前 scene 的内容',
+        })
+      }
+      debouncedSave.cancel()
       lastSceneIdRef.current = sceneId
     }
   }, [sceneId, debouncedSave])
