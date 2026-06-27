@@ -144,11 +144,15 @@ export function registerWorldRoutes(app: any, db: Database) {
 
   app.put<{ Params: { id: string } }>('/api/characters/:id', async (req) => {
     const body = characterBody.parse(req.body)
+    const expectedUpdatedAt = (req.body as any)?.expectedUpdatedAt as string | undefined
     const t = now()
-    db.prepare(
-      'UPDATE characters SET name=?, aliases=?, appearance=?, personality=?, background=?, relationships=?, voice_profile=?, notes=?, updated_at=? WHERE id=?'
-    ).run(body.name, JSON.stringify(body.aliases), body.appearance, body.personality, body.background, body.relationships, body.voiceProfile, body.notes, t, Number(req.params.id))
-    const row = db.prepare('SELECT * FROM characters WHERE id = ?').get(Number(req.params.id))
+    const id = Number(req.params.id)
+    const whereExtra = expectedUpdatedAt ? ' AND updated_at = ?' : ''
+    const upd = db.prepare(
+      `UPDATE characters SET name=?, aliases=?, appearance=?, personality=?, background=?, relationships=?, voice_profile=?, notes=?, updated_at=? WHERE id=?${whereExtra}`
+    ).run(body.name, JSON.stringify(body.aliases), body.appearance, body.personality, body.background, body.relationships, body.voiceProfile, body.notes, t, id, ...(expectedUpdatedAt ? [expectedUpdatedAt] : []))
+    if (upd.changes === 0) throw apiError(409, 'conflict', 'entity was modified by another operation')
+    const row = db.prepare('SELECT * FROM characters WHERE id = ?').get(id)
     if (!row) throw apiError(404, 'not_found', 'character not found')
     return toCharacterDto(row)
   })
@@ -180,11 +184,15 @@ export function registerWorldRoutes(app: any, db: Database) {
 
   app.put<{ Params: { id: string } }>('/api/world-elements/:id', async (req) => {
     const body = worldElementBody.parse(req.body)
+    const expectedUpdatedAt = (req.body as any)?.expectedUpdatedAt as string | undefined
     const t = now()
-    db.prepare(
-      'UPDATE world_elements SET name=?, category=?, description=?, notes=?, updated_at=? WHERE id=?'
-    ).run(body.name, body.category, body.description, body.notes, t, Number(req.params.id))
-    const row = db.prepare('SELECT * FROM world_elements WHERE id = ?').get(Number(req.params.id))
+    const id = Number(req.params.id)
+    const whereExtra = expectedUpdatedAt ? ' AND updated_at = ?' : ''
+    const upd = db.prepare(
+      `UPDATE world_elements SET name=?, category=?, description=?, notes=?, updated_at=? WHERE id=?${whereExtra}`
+    ).run(body.name, body.category, body.description, body.notes, t, id, ...(expectedUpdatedAt ? [expectedUpdatedAt] : []))
+    if (upd.changes === 0) throw apiError(409, 'conflict', 'entity was modified by another operation')
+    const row = db.prepare('SELECT * FROM world_elements WHERE id = ?').get(id)
     if (!row) throw apiError(404, 'not_found', 'world element not found')
     return toWorldDto(row)
   })
@@ -216,11 +224,15 @@ export function registerWorldRoutes(app: any, db: Database) {
 
   app.put<{ Params: { id: string } }>('/api/timeline/:id', async (req) => {
     const body = timelineEventBody.parse(req.body)
+    const expectedUpdatedAt = (req.body as any)?.expectedUpdatedAt as string | undefined
     const t = now()
-    db.prepare(
-      'UPDATE timeline_events SET title=?, era=?, description=?, related_character_ids=?, related_world_ids=?, notes=?, order_index=?, updated_at=? WHERE id=?'
-    ).run(body.title, body.era, body.description, JSON.stringify(body.relatedCharacterIds), JSON.stringify(body.relatedWorldIds), body.notes, body.orderIndex, t, Number(req.params.id))
-    const row = db.prepare('SELECT * FROM timeline_events WHERE id = ?').get(Number(req.params.id))
+    const id = Number(req.params.id)
+    const whereExtra = expectedUpdatedAt ? ' AND updated_at = ?' : ''
+    const upd = db.prepare(
+      `UPDATE timeline_events SET title=?, era=?, description=?, related_character_ids=?, related_world_ids=?, notes=?, order_index=?, updated_at=? WHERE id=?${whereExtra}`
+    ).run(body.title, body.era, body.description, JSON.stringify(body.relatedCharacterIds), JSON.stringify(body.relatedWorldIds), body.notes, body.orderIndex, t, id, ...(expectedUpdatedAt ? [expectedUpdatedAt] : []))
+    if (upd.changes === 0) throw apiError(409, 'conflict', 'entity was modified by another operation')
+    const row = db.prepare('SELECT * FROM timeline_events WHERE id = ?').get(id)
     if (!row) throw apiError(404, 'not_found', 'timeline event not found')
     return toTimelineDto(row)
   })
@@ -252,11 +264,15 @@ export function registerWorldRoutes(app: any, db: Database) {
 
   app.put<{ Params: { id: string } }>('/api/foreshadows/:id', async (req) => {
     const body = foreshadowBody.parse(req.body)
+    const expectedUpdatedAt = (req.body as any)?.expectedUpdatedAt as string | undefined
     const t = now()
-    db.prepare(
-      'UPDATE foreshadows SET title=?, description=?, status=?, planted_scene_id=?, resolved_scene_id=?, notes=?, updated_at=? WHERE id=?'
-    ).run(body.title, body.description, body.status, body.plantedSceneId ?? null, body.resolvedSceneId ?? null, body.notes, t, Number(req.params.id))
-    const row = db.prepare('SELECT * FROM foreshadows WHERE id = ?').get(Number(req.params.id))
+    const id = Number(req.params.id)
+    const whereExtra = expectedUpdatedAt ? ' AND updated_at = ?' : ''
+    const upd = db.prepare(
+      `UPDATE foreshadows SET title=?, description=?, status=?, planted_scene_id=?, resolved_scene_id=?, notes=?, updated_at=? WHERE id=?${whereExtra}`
+    ).run(body.title, body.description, body.status, body.plantedSceneId ?? null, body.resolvedSceneId ?? null, body.notes, t, id, ...(expectedUpdatedAt ? [expectedUpdatedAt] : []))
+    if (upd.changes === 0) throw apiError(409, 'conflict', 'entity was modified by another operation')
+    const row = db.prepare('SELECT * FROM foreshadows WHERE id = ?').get(id)
     if (!row) throw apiError(404, 'not_found', 'foreshadow not found')
     return toForeshadowDto(row)
   })
@@ -288,11 +304,15 @@ export function registerWorldRoutes(app: any, db: Database) {
 
   app.put<{ Params: { id: string } }>('/api/conflicts/:id', async (req) => {
     const body = conflictBody.parse(req.body)
+    const expectedUpdatedAt = (req.body as any)?.expectedUpdatedAt as string | undefined
     const t = now()
-    db.prepare(
-      'UPDATE conflicts SET title=?, type=?, description=?, related_character_ids=?, setup=?, escalation=?, climax=?, resolution=?, status=?, notes=?, updated_at=? WHERE id=?'
-    ).run(body.title, body.type, body.description, JSON.stringify(body.relatedCharacterIds), body.setup, body.escalation, body.climax, body.resolution, body.status, body.notes, t, Number(req.params.id))
-    const row = db.prepare('SELECT * FROM conflicts WHERE id = ?').get(Number(req.params.id))
+    const id = Number(req.params.id)
+    const whereExtra = expectedUpdatedAt ? ' AND updated_at = ?' : ''
+    const upd = db.prepare(
+      `UPDATE conflicts SET title=?, type=?, description=?, related_character_ids=?, setup=?, escalation=?, climax=?, resolution=?, status=?, notes=?, updated_at=? WHERE id=?${whereExtra}`
+    ).run(body.title, body.type, body.description, JSON.stringify(body.relatedCharacterIds), body.setup, body.escalation, body.climax, body.resolution, body.status, body.notes, t, id, ...(expectedUpdatedAt ? [expectedUpdatedAt] : []))
+    if (upd.changes === 0) throw apiError(409, 'conflict', 'entity was modified by another operation')
+    const row = db.prepare('SELECT * FROM conflicts WHERE id = ?').get(id)
     if (!row) throw apiError(404, 'not_found', 'conflict not found')
     return toConflictDto(row)
   })
