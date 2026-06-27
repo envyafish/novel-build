@@ -9,7 +9,10 @@
       "Bash(pnpm test *)",
       "Bash(git commit -m '修复：移除 AI 流的中断持久化与恢复功能 *)",
       "Bash(git commit -m '功能：审稿/提取面板改为居中模态并支持阻塞取消 *)",
-      "Bash(git commit -m '功能：新建场景与故事弧线对话框在 AI 执行时阻塞关闭 *)"
+      "Bash(git commit -m '功能：新建场景与故事弧线对话框在 AI 执行时阻塞关闭 *)",
+      "Bash(git commit -m '修复：进度条始终为 0 的问题 *)",
+      "Bash(git commit -m '修复：AI 输出完成时进度条未显示 100% *)",
+      "Bash(git commit -m '修复：切换场景时静默保存而非弹 toast 提醒 *)"
     ]
   }
 }
