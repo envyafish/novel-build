@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
-import { BookOpen, Loader2, Settings } from 'lucide-react'
+import { Loader2, Settings } from 'lucide-react'
 import { useIsMutating } from '@tanstack/react-query'
+import { NovelBuildIcon } from '@/components/icon/NovelBuildIcon'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -34,7 +35,7 @@ export function TopBar({ breadcrumbs = [], projectId }: TopBarProps) {
   return (
     <header className="sticky top-0 z-40 flex h-12 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <Link to="/projects" className="flex items-center gap-2 text-sm font-semibold text-foreground hover:text-foreground/80">
-        <BookOpen className="h-4 w-4" />
+        <NovelBuildIcon size={18} className="text-green-600 dark:text-green-500" />
         Novel Build
       </Link>
 
