@@ -35,7 +35,7 @@ export function TopBar({ breadcrumbs = [], projectId }: TopBarProps) {
   return (
     <header className="sticky top-0 z-40 flex h-12 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <Link to="/projects" className="flex items-center gap-2 text-sm font-semibold text-foreground hover:text-foreground/80">
-        <NovelBuildIcon size={18} className="text-green-600 dark:text-green-500" />
+        <NovelBuildIcon size={18} />
         Novel Build
       </Link>
 

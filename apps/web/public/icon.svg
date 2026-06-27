@@ -1,8 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- quill nib pointing down-left, bold enough to read at 16px -->
-  <path d="M8.5 2.5 L25.5 15 L18 29.5 L12 29.5 L8.5 2.5Z" fill="#16a34a" stroke="#15803d" stroke-width="0.6"/>
+  <!-- solid green background — works at 16px -->
+  <rect width="32" height="32" rx="7" fill="#16a34a"/>
+  <!-- pen nib — tip points DOWN, top is wide shoulder -->
+  <path d="M16 27 L11 6 L13.8 6.5 L14.7 18 L16 24 L17.3 18 L18.2 6.5 L21 6 Z" fill="#fff"/>
   <!-- slit line -->
-  <path d="M12 29 L17 17" stroke="#fff" stroke-width="1.3" stroke-linecap="round" opacity="0.85"/>
-  <!-- AI sparkle — four-point star centered at (26, 7) -->
-  <path d="M26 4 L27.5 5.5 L29 7 L27.5 8.5 L26 10 L24.5 8.5 L23 7 L24.5 5.5Z" fill="#f59e0b" opacity="0.95"/>
+  <line x1="16" y1="9" x2="16" y2="22" stroke="#16a34a" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- sparkle — upper right, small but crisp -->
+  <circle cx="26" cy="6" r="1.8" fill="#facc15"/>
+  <line x1="26" y1="2.5" x2="26" y2="9.5" stroke="#facc15" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="22.5" y1="6" x2="29.5" y2="6" stroke="#facc15" stroke-width="0.9" stroke-linecap="round"/>
 </svg>
