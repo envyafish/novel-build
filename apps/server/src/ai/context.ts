@@ -1,5 +1,5 @@
 import type { ChatMessage, CompletionMode } from '@novel/shared'
-import { buildMessages } from '@novel/shared'
+import { buildMessages, MODE_PROMPTS } from '@novel/shared'
 import type { Database } from '../db/sqlite.js'
 import { readManuscript } from '../manuscripts/io.js'
 import { manuscriptPath } from '../projects/paths.js'
@@ -298,5 +298,9 @@ export async function buildContext(input: ContextInput): Promise<{ messages: Cha
   }
 
   const messages = buildMessages(input.mode, input.systemPrompt, ctxText, input.inputText)
-  return { messages, modelMaxTokens: 0 }
+  // Each mode's expected output length is declared in MODE_PROMPTS. Passing it
+  // back to the caller (and ultimately to the client) lets the UI show a real
+  // progress bar instead of always 0%.
+  const modeMaxTokens = MODE_PROMPTS[input.mode]?.maxOutputTokens ?? 0
+  return { messages, modelMaxTokens: modeMaxTokens }
 }
