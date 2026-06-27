@@ -44,6 +44,15 @@ interface AiSidebarProps {
    *  possible (continue/polish/rewrite/expand/condense) — `mode` is forwarded
    *  to EditorPage.applyAcceptedText for logging / future scope-aware behavior. */
   onAccept: (text: string, mode: CompletionMode) => void
+  /** Width in pixels — owned by EditorPage's `useResizable` so the value
+   *  persists across sessions. */
+  width: number
+  /** Spread onto the left-edge drag handle. */
+  handleProps: {
+    onPointerDown: (e: React.PointerEvent<HTMLElement>) => void
+    role: 'separator'
+    'aria-orientation': 'vertical'
+  }
 }
 
 export function AiSidebar({
@@ -57,6 +66,8 @@ export function AiSidebar({
   aiReset: reset,
   aiAccept: accept,
   onAccept,
+  width,
+  handleProps,
 }: AiSidebarProps) {
   // The sidebar tracks which mode was last kicked off so the accept button
   // can label itself correctly (continue → "接受并续写"; otherwise → "接受并替换").
@@ -90,7 +101,10 @@ export function AiSidebar({
   }
 
   return (
-    <aside className="flex w-80 shrink-0 flex-col overflow-hidden border-l bg-background">
+    <aside
+      className="relative flex shrink-0 flex-col overflow-hidden border-l bg-background"
+      style={{ width }}
+    >
       <div className="flex shrink-0 items-center gap-2 border-b px-4 py-3">
         <Sparkles className="h-4 w-4" />
         <h2 className="text-sm font-semibold">AI 助手</h2>
@@ -221,6 +235,11 @@ export function AiSidebar({
           </>
         )}
       </div>
+      {/* Left-edge drag handle (this sidebar sits on the right of the screen). */}
+      <div
+        {...handleProps}
+        className="absolute left-0 top-0 z-10 h-full w-1 cursor-col-resize bg-transparent transition-colors hover:bg-primary/30 active:bg-primary/50"
+      />
     </aside>
   )
 }

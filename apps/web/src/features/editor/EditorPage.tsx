@@ -21,6 +21,7 @@ import { applyGeneratedScenes } from '../ai/sceneBatchCreate.js'
 import { useAiStream } from '../../hooks/useAiStream.js'
 import { StoryArcGenerator } from './StoryArcGenerator.js'
 import { useDebouncedSave } from '../../hooks/useDebouncedSave.js'
+import { useResizable, RESIZABLE_PARENT_ATTR } from '../../hooks/useResizable.js'
 import { TopBar } from '@/components/topbar'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -253,6 +254,21 @@ export function EditorPage() {
     return () => clearInterval(interval)
   }, [sceneId])
   const debouncedSave = useDebouncedSave(content, save, 800)
+  // Resizable sidebars — width persists to localStorage so the user's
+  // layout sticks across sessions. Min/max guard against squeezing the
+  // main editor area to nothing.
+  const leftSidebar = useResizable({
+    storageKey: 'novel-build.left-sidebar-width',
+    defaultWidth: 288, // w-72
+    min: 200,
+    side: 'right',
+  })
+  const rightSidebar = useResizable({
+    storageKey: 'novel-build.right-sidebar-width',
+    defaultWidth: 320, // w-80
+    min: 240,
+    side: 'left',
+  })
   // Scene-switch safety: when the user navigates to a different scene, any
   // pending debounced save for the *previous* scene must not fire after the
   // switch (it would race the new scene's baseHash and trigger a 422).
@@ -1130,9 +1146,12 @@ ${sceneText}`
     <div className="flex h-screen flex-col bg-background">
       <TopBar breadcrumbs={breadcrumbs} projectId={projectId} />
 
-      <div className="flex flex-1 overflow-hidden">
+      <div data-resizable-parent className="flex flex-1 overflow-hidden">
         {!focusMode && (
-          <aside className="flex h-full w-72 shrink-0 flex-col overflow-hidden border-r bg-sidebar-background">
+          <aside
+            className="relative flex h-full shrink-0 flex-col overflow-hidden border-r bg-sidebar-background"
+            style={{ width: leftSidebar.width }}
+          >
           {project.data && <ProjectStatsCard projectId={projectId} projectName={project.data.name} projectSlug={project.data.slug} />}
           <div className="flex border-b">
             <button onClick={() => setSidebarTab('outline')} className={`flex flex-1 items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${sidebarTab === 'outline' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'}`}><BookOpen className="h-3.5 w-3.5" /> 大纲</button>
@@ -1207,6 +1226,12 @@ ${sceneText}`
           ) : (
             <WorldPanel projectId={projectId} model={settings.data?.model ?? 'gpt-4o-mini'} />
           )}
+          {/* Right-edge drag handle. Wider hit area than the visual line so
+              dragging isn't fiddly. */}
+          <div
+            {...leftSidebar.handleProps}
+            className="absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize bg-transparent transition-colors hover:bg-primary/30 active:bg-primary/50"
+          />
         </aside>
         )}
 
@@ -1292,6 +1317,8 @@ ${sceneText}`
                     aiCancel={aiCancel}
                     aiReset={aiReset}
                     aiAccept={aiAccept}
+                    width={rightSidebar.width}
+                    handleProps={rightSidebar.handleProps}
                     onAccept={async (rawText, mode) => {
                       await applyAcceptedText(rawText, mode)
                       if (mode !== 'plan_story_arc' && mode !== 'analyze_voice' && mode !== 'generate_chapter') {
