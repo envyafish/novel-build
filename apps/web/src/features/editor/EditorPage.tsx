@@ -1131,7 +1131,7 @@ ${sceneText}`
 
       <div className="flex flex-1 overflow-hidden">
         {!focusMode && (
-          <aside className="w-72 shrink-0 overflow-hidden border-r bg-sidebar-background">
+          <aside className="flex h-full w-72 shrink-0 flex-col overflow-hidden border-r bg-sidebar-background">
           {project.data && <ProjectStatsCard projectId={projectId} projectName={project.data.name} projectSlug={project.data.slug} />}
           <div className="flex border-b">
             <button onClick={() => setSidebarTab('outline')} className={`flex flex-1 items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${sidebarTab === 'outline' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'}`}><BookOpen className="h-3.5 w-3.5" /> 大纲</button>
@@ -1191,12 +1191,14 @@ ${sceneText}`
                 </div>
               )}
               {outlineTree ? (
-                <OutlineTree
-                  nodes={outlineTree}
-                  currentSceneId={sceneId}
-                  selectedChapterId={selectedChapterId ?? undefined}
-                  handlers={outlineHandlers}
-                />
+                <div className="min-h-0 flex-1">
+                  <OutlineTree
+                    nodes={outlineTree}
+                    currentSceneId={sceneId}
+                    selectedChapterId={selectedChapterId ?? undefined}
+                    handlers={outlineHandlers}
+                  />
+                </div>
               ) : (
                 <div className="p-4 text-sm text-muted-foreground">读取大纲中…</div>
               )}
