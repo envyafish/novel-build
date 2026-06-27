@@ -35,12 +35,17 @@ export function useAiStream() {
   const [state, setState] = useState<AiStreamState>(INITIAL)
   const ctrl = useRef<AbortController | null>(null)
   const startedAt = useRef<number>(0)
+  // Generation counter: incremented on each start() call. The for-await loop
+  // checks this before applying events so a stale stream (whose AbortError
+  // hasn't propagated yet) can't corrupt the state of a newer stream.
+  const generationRef = useRef(0)
 
   const start = useCallback(async (body: object) => {
     ctrl.current?.abort()
     const c = new AbortController()
     ctrl.current = c
     startedAt.current = Date.now()
+    const gen = ++generationRef.current
     setState((s) => {
       const { errorMessage, ...rest } = s
       return { ...rest, text: '', status: 'streaming' as const, elapsedMs: 0, progressPct: 0 }
@@ -53,11 +58,14 @@ export function useAiStream() {
         signal: c.signal,
       })
       for await (const e of consumeNdjson(res, c.signal)) {
+        // A newer start() or cancel() has taken over — drop this event.
+        if (generationRef.current !== gen) return
         apply(e, setState)
         if (e.kind === 'done' || e.kind === 'error') break
       }
     } catch (e) {
       if ((e as Error).name === 'AbortError') return
+      if (generationRef.current !== gen) return
       setState({ text: '', status: 'error', errorMessage: (e as Error).message, maxOutputTokens: 0, elapsedMs: 0, progressPct: 0 })
     }
   }, [])

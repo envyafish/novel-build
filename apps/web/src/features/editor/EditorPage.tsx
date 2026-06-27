@@ -154,8 +154,11 @@ export function EditorPage() {
   }, [sceneId, toast])
 
   // Three-option dialog for external modification (spec 6.4)
+  // Both localMd and targetSceneId are captured at the 422-error site so that
+  // if the user switches scenes while the confirm dialog is open, the force-save
+  // still writes to the correct scene with the correct content.
   const handleExternalChange = useCallback(
-    async (localMd: string) => {
+    async (localMd: string, targetSceneId: number) => {
       const choice = await confirm({
         title: '外部修改检测',
         description: '磁盘上的草稿已被外部编辑器修改。请选择处理方式。',
@@ -165,12 +168,12 @@ export function EditorPage() {
       })
       if (choice) {
         // Reload from disk
-        qc.invalidateQueries({ queryKey: ['scene', sceneId] })
+        qc.invalidateQueries({ queryKey: ['scene', targetSceneId] })
         toast({ kind: 'info', title: '已重新加载' })
       } else {
         // Force save (overwrite external changes) — use server-side `force` to bypass baseHash guard.
         try {
-          const r = await api<{ hash: string }>(`/api/scenes/${sceneId}`, {
+          const r = await api<{ hash: string }>(`/api/scenes/${targetSceneId}`, {
             method: 'PUT',
             body: JSON.stringify({ markdown: localMd, baseHash, force: true }),
           })
@@ -183,7 +186,7 @@ export function EditorPage() {
         }
       }
     },
-    [sceneId, qc, confirm, toast],
+    [baseHash, qc, confirm, toast],
   )
 
   const save = useCallback(
@@ -207,7 +210,9 @@ export function EditorPage() {
           // Consume the externalHash so any subsequent debounce auto-save uses a fresh baseHash.
           const externalHash = (e.details as { externalHash?: string } | undefined)?.externalHash
           if (externalHash) setBaseHash(externalHash)
-          handleExternalChange(md)
+          // Capture sceneId at the error site — if the user switches scenes while
+          // the confirm dialog is open, the force-save still targets the correct scene.
+          handleExternalChange(md, sceneId)
         }
       }
     },
@@ -470,15 +475,18 @@ export function EditorPage() {
   // Helper: run AI fetch. `sceneId` is optional — server uses projectId for
   // ai_settings lookup and only needs sceneId for modes that pull scene-
   // specific context (continue/polish/rewrite on the current scene).
-  const runAiFetch = (mode: string, inputText: string, opts?: { sceneId?: number; signal?: AbortSignal }) =>
-    runAiCompletion({
-      projectId,
-      ...(opts?.sceneId !== undefined ? { sceneId: opts.sceneId } : sceneId !== undefined ? { sceneId } : {}),
-      mode,
-      model: settings.data?.model ?? 'gpt-4o-mini',
-      inputText,
-      ...(opts?.signal ? { signal: opts.signal } : {}),
-    })
+  const runAiFetch = useCallback(
+    (mode: string, inputText: string, opts?: { sceneId?: number; signal?: AbortSignal }) =>
+      runAiCompletion({
+        projectId,
+        ...(opts?.sceneId !== undefined ? { sceneId: opts.sceneId } : sceneId !== undefined ? { sceneId } : {}),
+        mode,
+        model: settings.data?.model ?? 'gpt-4o-mini',
+        inputText,
+        ...(opts?.signal ? { signal: opts.signal } : {}),
+      }),
+    [projectId, sceneId, settings.data?.model],
+  )
 
   // Helper: read all scenes in a given chapter (by chapterId, not derived from current scene).
   // Uses the single batch endpoint `GET /api/chapters/:id/content` so a 20-scene
@@ -762,6 +770,9 @@ export function EditorPage() {
   const applyReview = useCallback(
     async (action: 'replace_all' | 'extract') => {
       if (!reviewText) return
+      // Flush any pending debounced save so the AI reads the latest content
+      // from disk (not stale editor state) when it rewrites each scene.
+      await debouncedSave.flush()
       setApplyLoading(true)
       setApplyProgress(null)
       try {
@@ -796,11 +807,23 @@ ${sc.title}
 ${sceneText}`
               const rewritten = await runAiFetch('rewrite', rewritePrompt, { sceneId: sc.id })
               const formatted = formatAiOutput(rewritten)
-              // Save to server
-              await api(`/api/scenes/${sc.id}`, {
-                method: 'PUT',
-                body: JSON.stringify({ markdown: formatted, baseHash: sceneData.baseHash, force: true }),
-              })
+              // For the currently-open scene: don't use force so the baseHash
+              // guard can catch any concurrent external edits that happened
+              // while the AI was generating. Re-fetch baseHash right before
+              // save to minimize the race window.
+              // For other scenes: force is safe — no local editor state to protect.
+              if (sc.id === sceneId) {
+                const fresh = await api<{ baseHash: string }>(`/api/scenes/${sc.id}`)
+                await api(`/api/scenes/${sc.id}`, {
+                  method: 'PUT',
+                  body: JSON.stringify({ markdown: formatted, baseHash: fresh.baseHash }),
+                })
+              } else {
+                await api(`/api/scenes/${sc.id}`, {
+                  method: 'PUT',
+                  body: JSON.stringify({ markdown: formatted, baseHash: sceneData.baseHash, force: true }),
+                })
+              }
               applied++
             } catch (e) {
               const err = e instanceof ApiClientError ? e : (e as Error)
@@ -870,11 +893,18 @@ ${sceneText}`
                 return
               }
 
+              // Fetch all existing entities ONCE to avoid N+1 API calls.
+              const [existingChars, existingWorld, existingTimeline, existingConflicts, existingForeshadows] = await Promise.all([
+                worldApi.listCharacters(projectId),
+                worldApi.listWorldElements(projectId),
+                worldApi.listTimeline(projectId),
+                worldApi.listConflicts(projectId),
+                worldApi.listForeshadows(projectId),
+              ])
               const str = (v: unknown, dflt = ''): string => (typeof v === 'string' ? v : dflt)
               const arr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
               for (const c of data.characters ?? []) {
                 const name = str(c.name).trim() || '未命名'
-                const existingChars = await worldApi.listCharacters(projectId)
                 const existing = existingChars.find((e) => e.name === name)
                 if (existing) {
                   const existingNotes = existing.notes || ''
@@ -890,7 +920,9 @@ ${sceneText}`
                     relationships: str(c.relationships) || existing.relationships,
                     voiceProfile: str(c.voiceProfile) || existing.voiceProfile,
                     notes: mergedNotes,
-                  })
+                    // Optimistic lock: skip if the entity was modified since we fetched it.
+                    expectedUpdatedAt: existing.updatedAt,
+                  } as any)
                 } else {
                   await worldApi.createCharacter(projectId, {
                     name,
@@ -907,7 +939,6 @@ ${sceneText}`
               }
               for (const w of data.worldElements ?? []) {
                 const name = str(w.name).trim() || '未命名'
-                const existingWorld = await worldApi.listWorldElements(projectId)
                 const existing = existingWorld.find((e) => e.name === name)
                 if (existing) {
                   const existingNotes = existing.notes || ''
@@ -918,7 +949,8 @@ ${sceneText}`
                     category: (str(w.category) as WorldCategory) || existing.category,
                     description: str(w.description) || existing.description,
                     notes: mergedNotes,
-                  })
+                    expectedUpdatedAt: existing.updatedAt,
+                  } as any)
                 } else {
                   await worldApi.createWorldElement(projectId, {
                     name,
@@ -931,7 +963,6 @@ ${sceneText}`
               }
               for (const t of data.timeline ?? []) {
                 const title = str(t.title).trim() || '未命名'
-                const existingTimeline = await worldApi.listTimeline(projectId)
                 const existing = existingTimeline.find((e) => e.title === title)
                 if (existing) {
                   const existingNotes = existing.notes || ''
@@ -942,7 +973,8 @@ ${sceneText}`
                     era: str(t.era) || existing.era,
                     description: str(t.description) || existing.description,
                     notes: mergedNotes,
-                  })
+                    expectedUpdatedAt: existing.updatedAt,
+                  } as any)
                 } else {
                   await worldApi.createTimelineEvent(projectId, {
                     title,
@@ -955,7 +987,6 @@ ${sceneText}`
               }
               for (const c of data.conflicts ?? []) {
                 const title = str(c.title).trim() || '未命名'
-                const existingConflicts = await worldApi.listConflicts(projectId)
                 const existing = existingConflicts.find((e) => e.title === title)
                 if (existing) {
                   const existingNotes = existing.notes || ''
@@ -970,7 +1001,8 @@ ${sceneText}`
                     climax: str(c.climax) || existing.climax,
                     resolution: str(c.resolution) || existing.resolution,
                     notes: mergedNotes,
-                  })
+                    expectedUpdatedAt: existing.updatedAt,
+                  } as any)
                 } else {
                   await worldApi.createConflict(projectId, {
                     title,
@@ -988,7 +1020,6 @@ ${sceneText}`
               }
               for (const f of data.foreshadows ?? []) {
                 const title = str(f.title).trim() || '未命名'
-                const existingForeshadows = await worldApi.listForeshadows(projectId)
                 const existing = existingForeshadows.find((e) => e.title === title)
                 if (existing) {
                   const existingNotes = existing.notes || ''
@@ -999,7 +1030,8 @@ ${sceneText}`
                     description: str(f.description) || existing.description,
                     status: (str(f.status) as ForeshadowStatus) || existing.status,
                     notes: mergedNotes,
-                  })
+                    expectedUpdatedAt: existing.updatedAt,
+                  } as any)
                 } else {
                   await worldApi.createForeshadow(projectId, {
                     title,

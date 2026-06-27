@@ -23,9 +23,12 @@ export function formatAiOutput(text: string): string {
     .map((line) => line.trimEnd())
     .join('\n')
 
-  // 5. Ensure paragraphs are separated by exactly one blank line
-  //    (Chinese novels typically use a blank line between paragraphs in digital format)
-  s = s.replace(/([^\n])\n([^\n])/g, '$1\n\n$2')
+  // 5. Ensure paragraphs are separated by exactly one blank line,
+  //    but ONLY after lines ending with sentence-final punctuation.
+  //    This preserves intentional single-newline breaks inside dialogue,
+  //    poetry, or lists while still adding paragraph spacing between
+  //    proper sentences (the norm in Chinese digital novels).
+  s = s.replace(/([.!?。！？…""'"）\)])\n([^\n])/g, '$1\n\n$2')
 
   // 6. Remove leading/trailing whitespace
   s = s.trim()
