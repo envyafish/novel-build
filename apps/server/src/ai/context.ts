@@ -305,9 +305,12 @@ export async function buildContext(input: ContextInput): Promise<{ messages: Cha
   }
 
   const messages = buildMessages(input.mode, input.systemPrompt, ctxText, input.inputText)
-  // Each mode's expected output length is declared in MODE_PROMPTS. Passing it
-  // back to the caller (and ultimately to the client) lets the UI show a real
-  // progress bar instead of always 0%.
-  const modeMaxTokens = MODE_PROMPTS[input.mode]?.maxOutputTokens ?? 0
+  // Each mode's expected output length is declared in MODE_PROMPTS. It can be
+  // a fixed number or a function derived from `inputText` (e.g.
+  // `generate_chapter` scales the limit with the requested scene count).
+  // Passing it back to the caller (and ultimately to the client) lets the UI
+  // show a real progress bar instead of always 0%.
+  const rawMaxTokens = MODE_PROMPTS[input.mode]?.maxOutputTokens ?? 0
+  const modeMaxTokens = typeof rawMaxTokens === 'function' ? rawMaxTokens(input.inputText) : rawMaxTokens
   return { messages, modelMaxTokens: modeMaxTokens }
 }

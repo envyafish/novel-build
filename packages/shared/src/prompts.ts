@@ -12,11 +12,15 @@ export interface ModePrompt {
    * - Server can optionally pass this through to the provider's `max_tokens`
    *   parameter to cap runaway generation.
    *
+   * Can be a fixed number or a function that derives the limit from the
+   * user's `inputText` (e.g. for `generate_chapter` where the desired scene
+   * count is embedded in the prompt and the output size scales with it).
+   *
    * Tuned to ~1.3 tokens per Chinese character (typical CJK tokenization)
    * with 50% headroom over the prompt's stated word cap so the bar reaches
    * 100% at the prompt's natural endpoint rather than running off the top.
    */
-  maxOutputTokens: number
+  maxOutputTokens: number | ((inputText: string) => number)
 }
 
 const COMMON_SYSTEM =
@@ -90,7 +94,16 @@ ${ctx}
 
 [章节大纲]
 ${input}`,
-    maxOutputTokens: 8000,
+    // 1500 tokens per scene — comfortably above the 800-1500 char/scene
+    // guidance from GenerateScenesDialog with 50% headroom, plus a 1000
+    // token floor so single-scene generations aren't capped too tight.
+    // We parse the count from `inputText` (the client prefixes the prompt
+    // with `恰好 N 个场景`) so token budget tracks the user's intent.
+    maxOutputTokens: (inputText: string) => {
+      const m = inputText.match(/恰好\s+(\d+)\s+个场景/)
+      const count = m ? Number(m[1]) : 3
+      return Math.max(1000, count * 1500)
+    },
   },
   consistency_check: {
     system:
