@@ -275,7 +275,13 @@ export async function buildContext(input: ContextInput): Promise<{ messages: Cha
       const titlesLine = sceneTitles.length > 0
         ? sceneTitles.map((s) => `- ${s.title}`).join('\n')
         : '(本章节暂无场景)'
-      ctxText = `[Current chapter]\nPrevious scenes in this chapter:\n${titlesLine}\n\n[Previous chapter tail]\n${chapterTail}`
+      // If the chapter has no written tail (e.g. brand-new chapter) tell the
+      // AI explicitly so it knows to write an opening rather than try to
+      // continue from nothing.
+      const tailSection = chapterTail
+        ? `\n\n[Previous chapter tail]\n${chapterTail}`
+        : `\n\n[Previous chapter tail]\n(本章节还没有已写内容 — 这是开篇场景,请直接开始)`
+      ctxText = `[Current chapter]\nPrevious scenes in this chapter:\n${titlesLine}${tailSection}`
     }
   }
 

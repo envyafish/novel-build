@@ -304,7 +304,7 @@ export function GenerateScenesDialog({
                 <Sparkles className="h-4 w-4" /> 一键生成场景
               </DialogTitle>
               <DialogDescription>
-                AI 会读取「{chapterTitle}」末尾作为上下文，一次性生成多个场景并按顺序插入到该章节末尾。
+                AI 会读取「{chapterTitle}」末尾作为上下文，一次性生成多个场景并按顺序插入到该章节末尾。若章节为空（无已写场景），AI 会从开篇写起。
               </DialogDescription>
             </DialogHeader>
             <form
